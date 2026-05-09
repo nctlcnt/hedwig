@@ -57,7 +57,7 @@ export async function ensureAutoLabels(gmail: GmailClient): Promise<Map<string, 
 
 export async function listRecentInboxMessages(
   gmail: GmailClient,
-  { lookbackHours, maxMessages, unreadOnly }: AppConfig['digest']
+  { lookbackHours, maxMessages, unreadOnly }: Pick<AppConfig['digest'], 'lookbackHours' | 'maxMessages' | 'unreadOnly'>
 ): Promise<gmail_v1.Schema$Message[]> {
   const afterSeconds = Math.floor((Date.now() - lookbackHours * 60 * 60 * 1000) / 1000);
   const unreadQuery = unreadOnly ? ' is:unread' : '';

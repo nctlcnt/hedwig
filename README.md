@@ -23,12 +23,19 @@ apps/
   backend/
     prompts/              # LLM prompts
     scripts/              # one-off auth/setup scripts
-    src/                  # Gmail, Discord, digest, classifier providers
+    src/                  # digest, Discord, database, classifier providers
+      gateway/            # personal data access boundaries and adapters
   frontend/
     README.md             # reserved for a future admin UI
 ```
 
 The current product surface is backend-only. `apps/frontend` exists so the repo shape is clear before adding UI.
+
+## architecture boundary
+
+Hedwig owns the email digest product workflow: classification, reporting, Discord delivery, and local SQLite run/message records. Direct personal data access sits behind gateway interfaces under `apps/backend/src/gateway/`.
+
+The current `MailGateway` implementation is Gmail-backed and still reuses this repo's OAuth, token, and Gmail API helpers. Digest code depends on the gateway interface, not Gmail API helpers directly, so a future `personal-gateway` service can replace the adapter without rewriting digest, classifier, Discord, or database logic.
 
 ### setup
 

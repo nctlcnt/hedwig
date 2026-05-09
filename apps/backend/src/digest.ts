@@ -9,26 +9,16 @@ import {
   saveMessage,
   updateDigestRunAccount
 } from './db.js';
-import {
-  applyLabel,
-  createGmailClient,
-  ensureAutoLabels,
-  getCurrentUser,
-  getMessage,
-  listRecentInboxMessages,
-  markMessagesRead
-} from './gmail.js';
 import { sendDiscordDigest } from './discord.js';
 import type {
   AppConfig,
   Category,
   DigestAccountSummary,
   DigestItem,
-  DigestReport,
-  GmailAccountConfig,
-  GmailClient
+  DigestReport
 } from './types.js';
 import type { HedwigDb } from './db.js';
+import type { MailAccount, MailGateway } from './gateway/mail-gateway.js';
 
 type AccountDigestResult = {
   runId: number;
@@ -41,12 +31,11 @@ type AccountDigestResult = {
   error?: string;
 };
 
-export async function runDailyDigest(config: AppConfig, db: HedwigDb): Promise<DigestReport> {
+export async function runDailyDigest(config: AppConfig, db: HedwigDb, mailGateway: MailGateway): Promise<DigestReport> {
   const results: AccountDigestResult[] = [];
 
-  for (const account of config.google.accounts) {
-    const gmail = createGmailClient(config, account);
-    results.push(await runAccountDigest(config, account, gmail, db));
+  for (const account of mailGateway.listAccounts()) {
+    results.push(await runAccountDigest(config, account, mailGateway, db));
   }
 
   const digest = buildDigest(config, results);
@@ -56,8 +45,8 @@ export async function runDailyDigest(config: AppConfig, db: HedwigDb): Promise<D
 
 async function runAccountDigest(
   config: AppConfig,
-  accountConfig: GmailAccountConfig,
-  gmail: GmailClient,
+  accountConfig: MailAccount,
+  mailGateway: MailGateway,
   db: HedwigDb
 ): Promise<AccountDigestResult> {
   let account = accountConfig.displayName;
@@ -67,17 +56,17 @@ async function runAccountDigest(
   const digestedMessageIds: string[] = [];
 
   try {
-    account = await getCurrentUser(gmail);
+    account = await mailGateway.getCurrentUser(accountConfig);
     updateDigestRunAccount(db, runId, account);
-    const labelIds = await ensureAutoLabels(gmail);
-    const refs = await listRecentInboxMessages(gmail, config.digest);
+    const labelIds = await mailGateway.ensureAutoLabels(accountConfig);
+    const refs = await mailGateway.listRecentInboxMessages(accountConfig, config.digest);
     const categoryLabelIds = Object.values(categories())
       .map((category) => labelIds.get(category.label))
       .filter((id): id is string => Boolean(id));
 
     for (const ref of refs) {
       if (!ref.id) continue;
-      const email = await getMessage(gmail, accountConfig, account, ref.id);
+      const email = await mailGateway.getMessage(accountConfig, account, ref.id);
       if (email.labelIds.includes('SPAM') || email.labelIds.includes('TRASH')) {
         continue;
       }
@@ -87,8 +76,8 @@ async function runAccountDigest(
       if (!selectedLabelId) {
         throw new Error(`Missing Gmail label id for ${classification.gmailLabel}`);
       }
-      await applyLabel(
-        gmail,
+      await mailGateway.applyLabel(
+        accountConfig,
         email.id,
         selectedLabelId,
         categoryLabelIds.filter((id) => id !== selectedLabelId)
@@ -111,7 +100,7 @@ async function runAccountDigest(
       });
     }
 
-    await markMessagesRead(gmail, digestedMessageIds);
+    await mailGateway.markMessagesRead(accountConfig, digestedMessageIds);
     const counts = groupCounts(grouped);
     const total = totalCount(counts);
     finishDigestRun(db, runId, total);
