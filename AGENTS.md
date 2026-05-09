@@ -41,9 +41,18 @@ When adding behavior with meaningful branching, add focused tests and a matching
 
 ## Commit & Pull Request Guidelines
 
-Recent history uses short, imperative commit subjects such as `Build TypeScript Gmail digest backend` and `Resolve punycode deprecation source`. Keep commits focused and explain the reason in the body when context is not obvious. If work is tracked in Linear, reference the issue in the body, for example `Refs HED-123` or `Fixes HED-123`.
+### Commits
+- Imperative subject, ≤ 50 chars
+- Blank line, then body explaining *why*
+- Reference Linear only when needed:
+  - `Fixes HED-123` on the final/merge commit (auto-closes the issue)
+  - `Refs HED-456` when a commit touches an unrelated issue
 
-Pull requests should include a concise summary, linked Linear issue when applicable, verification steps, and screenshots only for future UI work.
+### Branches
+- Named `<type>/<issue-id>-<slug>`, e.g. `feat/HED-123-gmail-digest`
+- Type: `feat` / `fix` / `chore` / `refactor`
+- Issue ID in branch handles the linking — no need to repeat in every commit
+- Delete after merge
 
 ## Security & Configuration Tips
 
