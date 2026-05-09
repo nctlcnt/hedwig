@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "google:auth": "tsx apps/backend/scripts/google-auth.ts",
-    "digest:once": "tsx apps/backend/src/index.ts once",
-    "digest:daemon": "tsx apps/backend/src/index.ts daemon",
+    "google:auth": "node --disable-warning=DEP0040 --import tsx apps/backend/scripts/google-auth.ts",
+    "digest:once": "node --disable-warning=DEP0040 --import tsx apps/backend/src/index.ts once",
+    "digest:daemon": "node --disable-warning=DEP0040 --import tsx apps/backend/src/index.ts daemon",
     "check": "tsc --noEmit"
   },
   "dependencies": {
