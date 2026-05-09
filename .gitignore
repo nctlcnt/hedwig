@@ -2,3 +2,5 @@ node_modules/
 .env
 data/
 dist/
+config/gmail-accounts.json
+config/google-tokens/

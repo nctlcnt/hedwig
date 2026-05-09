@@ -1,33 +1,83 @@
 import { DateTime } from 'luxon';
 import { categories, categoryOrder } from './classifier.js';
 import { createClassifier } from './classifiers.js';
-import { createDigestRun, failDigestRun, finishDigestRun, saveClassification, saveMessage } from './db.js';
+import {
+  createDigestRun,
+  failDigestRun,
+  finishDigestRun,
+  saveClassification,
+  saveMessage,
+  updateDigestRunAccount
+} from './db.js';
 import {
   applyLabel,
+  createGmailClient,
   ensureAutoLabels,
   getCurrentUser,
   getMessage,
-  listRecentInboxMessages
+  listRecentInboxMessages,
+  markMessagesRead
 } from './gmail.js';
 import { sendDiscordDigest } from './discord.js';
-import type { AppConfig, Category, DigestItem, DigestReport, GmailClient } from './types.js';
+import type {
+  AppConfig,
+  Category,
+  DigestAccountSummary,
+  DigestItem,
+  DigestReport,
+  GmailAccountConfig,
+  GmailClient
+} from './types.js';
 import type { HedwigDb } from './db.js';
 
-export async function runDailyDigest(config: AppConfig, gmail: GmailClient, db: HedwigDb): Promise<DigestReport> {
-  const account = await getCurrentUser(gmail);
-  const runId = createDigestRun(db, account, new Date());
-  const labelIds = await ensureAutoLabels(gmail);
-  const refs = await listRecentInboxMessages(gmail, config.digest);
+type AccountDigestResult = {
+  runId: number;
+  accountId: string;
+  accountName: string;
+  accountEmail: string;
+  grouped: Record<Category, DigestItem[]>;
+  counts: Record<Category, number>;
+  total: number;
+  error?: string;
+};
+
+export async function runDailyDigest(config: AppConfig, db: HedwigDb): Promise<DigestReport> {
+  const results: AccountDigestResult[] = [];
+
+  for (const account of config.google.accounts) {
+    const gmail = createGmailClient(config, account);
+    results.push(await runAccountDigest(config, account, gmail, db));
+  }
+
+  const digest = buildDigest(config, results);
+  await sendDiscordDigest(config, digest);
+  return digest;
+}
+
+async function runAccountDigest(
+  config: AppConfig,
+  accountConfig: GmailAccountConfig,
+  gmail: GmailClient,
+  db: HedwigDb
+): Promise<AccountDigestResult> {
+  let account = accountConfig.displayName;
+  const runId = createDigestRun(db, accountConfig.id, account, new Date());
   const grouped = emptyGroups();
-  const categoryLabelIds = Object.values(categories())
-    .map((category) => labelIds.get(category.label))
-    .filter((id): id is string => Boolean(id));
   const classifier = createClassifier(config);
+  const digestedMessageIds: string[] = [];
 
   try {
+    account = await getCurrentUser(gmail);
+    updateDigestRunAccount(db, runId, account);
+    const labelIds = await ensureAutoLabels(gmail);
+    const refs = await listRecentInboxMessages(gmail, config.digest);
+    const categoryLabelIds = Object.values(categories())
+      .map((category) => labelIds.get(category.label))
+      .filter((id): id is string => Boolean(id));
+
     for (const ref of refs) {
       if (!ref.id) continue;
-      const email = await getMessage(gmail, ref.id);
+      const email = await getMessage(gmail, accountConfig, account, ref.id);
       if (email.labelIds.includes('SPAM') || email.labelIds.includes('TRASH')) {
         continue;
       }
@@ -45,8 +95,11 @@ export async function runDailyDigest(config: AppConfig, gmail: GmailClient, db: 
       );
       saveMessage(db, account, email);
       saveClassification(db, runId, email, classification);
+      digestedMessageIds.push(email.id);
 
       grouped[classification.category].push({
+        accountId: accountConfig.id,
+        accountName: accountConfig.displayName,
         id: email.id,
         from: email.from,
         subject: email.subject,
@@ -58,13 +111,31 @@ export async function runDailyDigest(config: AppConfig, gmail: GmailClient, db: 
       });
     }
 
-    const digest = buildDigest(config, runId, account, grouped);
-    await sendDiscordDigest(config, digest);
-    finishDigestRun(db, runId, digest.total);
-    return digest;
+    await markMessagesRead(gmail, digestedMessageIds);
+    const counts = groupCounts(grouped);
+    const total = totalCount(counts);
+    finishDigestRun(db, runId, total);
+    return {
+      runId,
+      accountId: accountConfig.id,
+      accountName: accountConfig.displayName,
+      accountEmail: account,
+      grouped,
+      counts,
+      total
+    };
   } catch (error) {
     failDigestRun(db, runId, error);
-    throw error;
+    return {
+      runId,
+      accountId: accountConfig.id,
+      accountName: accountConfig.displayName,
+      accountEmail: account,
+      grouped,
+      counts: groupCounts(grouped),
+      total: totalCount(groupCounts(grouped)),
+      error: errorMessage(error)
+    };
   }
 }
 
@@ -72,12 +143,8 @@ function emptyGroups(): Record<Category, DigestItem[]> {
   return Object.fromEntries(categoryOrder().map((category) => [category, []])) as unknown as Record<Category, DigestItem[]>;
 }
 
-function buildDigest(
-  config: AppConfig,
-  runId: number,
-  account: string,
-  grouped: Record<Category, DigestItem[]>
-): DigestReport {
+function buildDigest(config: AppConfig, results: AccountDigestResult[]): DigestReport {
+  const grouped = mergeGroups(results);
   const metadata = categories();
   const sections = categoryOrder().map((category) => ({
     category,
@@ -85,16 +152,52 @@ function buildDigest(
     items: grouped[category].sort((a, b) => b.importance - a.importance)
   }));
 
-  const counts = Object.fromEntries(
-    categoryOrder().map((category) => [category, grouped[category].length])
-  ) as Record<Category, number>;
+  const counts = groupCounts(grouped);
+  const accounts = results.map(toAccountSummary);
 
   return {
-    runId,
-    account,
+    runIds: results.map((result) => result.runId),
+    account: accounts.map((item) => `${item.accountName} <${item.accountEmail}>`).join(', '),
     date: DateTime.now().setZone(config.digest.timezone).toISODate() || new Date().toISOString().slice(0, 10),
-    total: categoryOrder().reduce((sum, category) => sum + counts[category], 0),
+    total: totalCount(counts),
     counts,
+    accounts,
     sections
   };
+}
+
+function mergeGroups(results: AccountDigestResult[]): Record<Category, DigestItem[]> {
+  const grouped = emptyGroups();
+  for (const result of results) {
+    for (const category of categoryOrder()) {
+      grouped[category].push(...result.grouped[category]);
+    }
+  }
+  return grouped;
+}
+
+function groupCounts(grouped: Record<Category, DigestItem[]>): Record<Category, number> {
+  return Object.fromEntries(
+    categoryOrder().map((category) => [category, grouped[category].length])
+  ) as Record<Category, number>;
+}
+
+function totalCount(counts: Record<Category, number>): number {
+  return categoryOrder().reduce((sum, category) => sum + counts[category], 0);
+}
+
+function toAccountSummary(result: AccountDigestResult): DigestAccountSummary {
+  return {
+    accountId: result.accountId,
+    accountName: result.accountName,
+    accountEmail: result.accountEmail,
+    runId: result.runId,
+    total: result.total,
+    counts: result.counts,
+    error: result.error
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

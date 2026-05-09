@@ -1,6 +1,6 @@
 # Hedwig backend
 
-Node service for Gmail digest, Gmail labels, Discord delivery, and classifier providers.
+Node service for multi-account Gmail digest, Gmail labels, Discord delivery, and classifier providers.
 
 Current providers:
 
@@ -14,3 +14,12 @@ npm run digest:once
 npm run digest:daemon
 npm run google:auth
 ```
+
+For multiple Gmail accounts, prefer JSON token files:
+
+```bash
+npm run google:auth -- main "Main Gmail"
+npm run google:auth -- school "School Gmail"
+```
+
+This updates `config/gmail-accounts.json` and writes tokens under `config/google-tokens/`. Each account keeps independent processing state in SQLite.

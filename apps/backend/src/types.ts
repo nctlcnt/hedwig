@@ -7,7 +7,7 @@ export type AppConfig = {
     clientId: string;
     clientSecret: string;
     redirectUri: string;
-    refreshToken: string;
+    accounts: GmailAccountConfig[];
   };
   discord: {
     botToken: string;
@@ -18,6 +18,7 @@ export type AppConfig = {
     cron: string;
     lookbackHours: number;
     maxMessages: number;
+    unreadOnly: boolean;
   };
   classifier: {
     provider: 'rule' | 'gemini';
@@ -31,9 +32,17 @@ export type AppConfig = {
   };
 };
 
+export type GmailAccountConfig = {
+  id: string;
+  displayName: string;
+  refreshToken: string;
+};
+
 export type GmailClient = gmail_v1.Gmail;
 
 export type EmailMessage = {
+  accountId: string;
+  accountEmail: string;
   id: string;
   threadId: string;
   labelIds: string[];
@@ -57,6 +66,8 @@ export type Classification = {
 };
 
 export type DigestItem = {
+  accountId: string;
+  accountName: string;
   id: string;
   from: string;
   subject: string;
@@ -73,12 +84,23 @@ export type DigestSection = {
   items: DigestItem[];
 };
 
-export type DigestReport = {
+export type DigestAccountSummary = {
+  accountId: string;
+  accountName: string;
+  accountEmail: string;
   runId: number;
+  total: number;
+  counts: Record<Category, number>;
+  error?: string;
+};
+
+export type DigestReport = {
+  runIds: number[];
   account: string;
   date: string;
   total: number;
   counts: Record<Category, number>;
+  accounts: DigestAccountSummary[];
   sections: DigestSection[];
 };
 

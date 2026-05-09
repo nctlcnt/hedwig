@@ -1,6 +1,6 @@
 import { google } from 'googleapis';
 import type { gmail_v1 } from 'googleapis';
-import type { AppConfig, EmailMessage, GmailClient } from './types.js';
+import type { AppConfig, EmailMessage, GmailAccountConfig, GmailClient } from './types.js';
 
 const AUTO_LABELS = [
   'AUTO/action',
@@ -11,13 +11,13 @@ const AUTO_LABELS = [
   'AUTO/digest'
 ];
 
-export function createGmailClient(config: AppConfig): GmailClient {
+export function createGmailClient(config: AppConfig, account: GmailAccountConfig): GmailClient {
   const auth = new google.auth.OAuth2(
     config.google.clientId,
     config.google.clientSecret,
     config.google.redirectUri
   );
-  auth.setCredentials({ refresh_token: config.google.refreshToken });
+  auth.setCredentials({ refresh_token: account.refreshToken });
   return google.gmail({ version: 'v1', auth });
 }
 
@@ -57,25 +57,31 @@ export async function ensureAutoLabels(gmail: GmailClient): Promise<Map<string, 
 
 export async function listRecentInboxMessages(
   gmail: GmailClient,
-  { lookbackHours, maxMessages }: AppConfig['digest']
+  { lookbackHours, maxMessages, unreadOnly }: AppConfig['digest']
 ): Promise<gmail_v1.Schema$Message[]> {
   const afterSeconds = Math.floor((Date.now() - lookbackHours * 60 * 60 * 1000) / 1000);
+  const unreadQuery = unreadOnly ? ' is:unread' : '';
   const response = await gmail.users.messages.list({
     userId: 'me',
     maxResults: maxMessages,
-    q: `in:inbox -in:spam -in:trash after:${afterSeconds}`
+    q: `in:inbox${unreadQuery} -in:spam -in:trash after:${afterSeconds}`
   });
 
   return response.data.messages || [];
 }
 
-export async function getMessage(gmail: GmailClient, id: string): Promise<EmailMessage> {
+export async function getMessage(
+  gmail: GmailClient,
+  account: GmailAccountConfig,
+  accountEmail: string,
+  id: string
+): Promise<EmailMessage> {
   const response = await gmail.users.messages.get({
     userId: 'me',
     id,
     format: 'full'
   });
-  return normalizeMessage(response.data);
+  return normalizeMessage(response.data, account, accountEmail);
 }
 
 export async function applyLabel(
@@ -94,13 +100,31 @@ export async function applyLabel(
   });
 }
 
-function normalizeMessage(message: gmail_v1.Schema$Message): EmailMessage {
+export async function markMessagesRead(gmail: GmailClient, messageIds: string[]): Promise<void> {
+  if (messageIds.length === 0) return;
+
+  await gmail.users.messages.batchModify({
+    userId: 'me',
+    requestBody: {
+      ids: messageIds,
+      removeLabelIds: ['UNREAD']
+    }
+  });
+}
+
+function normalizeMessage(
+  message: gmail_v1.Schema$Message,
+  account: GmailAccountConfig,
+  accountEmail: string
+): EmailMessage {
   const headers = message.payload?.headers || [];
   const subject = header(headers, 'Subject') || '(no subject)';
   const from = header(headers, 'From') || '(unknown sender)';
   const date = parseDate(header(headers, 'Date'), Number.parseInt(message.internalDate || '', 10));
 
   return {
+    accountId: account.id,
+    accountEmail,
     id: requireMessageField(message.id, 'id'),
     threadId: requireMessageField(message.threadId, 'threadId'),
     labelIds: message.labelIds || [],
@@ -110,7 +134,7 @@ function normalizeMessage(message: gmail_v1.Schema$Message): EmailMessage {
     date,
     snippet: message.snippet || '',
     text: extractText(message.payload),
-    gmailUrl: `https://mail.google.com/mail/u/0/#inbox/${message.threadId}`
+    gmailUrl: `https://mail.google.com/mail/u/${encodeURIComponent(accountEmail)}/#inbox/${message.threadId}`
   };
 }
 

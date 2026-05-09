@@ -1,0 +1,14 @@
+{
+  "accounts": [
+    {
+      "id": "main",
+      "displayName": "Main Gmail",
+      "refreshTokenFile": "config/google-tokens/main.json"
+    },
+    {
+      "id": "school",
+      "displayName": "School Gmail",
+      "refreshTokenFile": "config/google-tokens/school.json"
+    }
+  ]
+}

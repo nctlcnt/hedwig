@@ -6,13 +6,15 @@ tracking this stack in [邮件-digest-overview](https://linear.app/chachas/proje
 
 This repo now contains the first runnable Hedwig slice:
 
-- reads the current Gmail account inbox for the past 24 hours
+- reads one or more configured Gmail account inboxes for the past 24 hours
+- ignores read messages by default (`GMAIL_UNREAD_ONLY=true`)
 - excludes Spam and Trash
 - creates only the allowed Gmail labels: `AUTO/action`, `AUTO/fyi`, `AUTO/course`, `AUTO/admin`, `AUTO/junk`, `AUTO/digest`
 - classifies each message conservatively, with Junk requiring unsubscribe or marketing evidence
 - applies one `AUTO/*` label to each message
 - sends the digest to Discord through the Hedwig bot instead of emailing it back to Gmail
-- never replies, archives, deletes, marks read, or touches Drive
+- marks digested messages as read after the Discord digest is sent
+- never replies, archives, deletes, trashes, or touches Drive
 
 ## repo layout
 
@@ -35,7 +37,7 @@ cp .env.example .env
 npm install
 ```
 
-Fill `.env` with a Gmail OAuth client refresh token, the Hedwig Discord bot token/channel, and optionally Gemini:
+Fill `.env` with Gmail OAuth client refresh token values, the Hedwig Discord bot token/channel, and optionally Gemini:
 
 ```text
 CLASSIFIER_PROVIDER=gemini
@@ -52,9 +54,9 @@ Required Gmail OAuth scope:
 https://www.googleapis.com/auth/gmail.modify
 ```
 
-`gmail.modify` is needed because Hedwig creates and applies labels. The code does not call reply, send, archive, delete, trash, read-state, or Drive APIs.
+`gmail.modify` is needed because Hedwig creates and applies labels, then marks digested messages as read. The code does not call reply, send, archive, delete, trash, or Drive APIs.
 
-To get `GOOGLE_REFRESH_TOKEN`, first fill these values in `.env`:
+To get a Gmail refresh token, first fill these values in `.env`:
 
 ```text
 GOOGLE_CLIENT_ID=
@@ -69,6 +71,44 @@ npm run google:auth
 ```
 
 Open the printed URL, approve access, copy the `code` query parameter from the redirected URL, and paste it back into the terminal. The script prints the `GOOGLE_REFRESH_TOKEN` line for `.env`.
+
+The preferred multi-account setup is JSON plus local token files. Authorize each account once:
+
+```bash
+npm run google:auth -- main "Main Gmail"
+npm run google:auth -- school "School Gmail"
+```
+
+Each run opens a Google consent URL, then writes:
+
+```text
+config/gmail-accounts.json
+config/google-tokens/<account_id>.json
+```
+
+Both paths are ignored by git. The resulting JSON looks like:
+
+```json
+{
+  "accounts": [
+    {
+      "id": "main",
+      "displayName": "Main Gmail",
+      "refreshTokenFile": "config/google-tokens/main.json"
+    }
+  ]
+}
+```
+
+Single-account mode can still use `GOOGLE_REFRESH_TOKEN` directly. Legacy env multi-account mode also works with `GMAIL_ACCOUNTS`, where each entry points to the env var that stores that account's refresh token:
+
+```text
+GMAIL_ACCOUNTS=main:Main Gmail:GOOGLE_REFRESH_TOKEN_MAIN,school:School Gmail:GOOGLE_REFRESH_TOKEN_SCHOOL
+GOOGLE_REFRESH_TOKEN_MAIN=
+GOOGLE_REFRESH_TOKEN_SCHOOL=
+```
+
+Account ids must be stable because they are stored in SQLite and used for per-account deduping.
 
 ### run once
 
@@ -87,6 +127,32 @@ Default schedule:
 ```text
 DIGEST_TIMEZONE=Australia/Sydney
 DIGEST_CRON=0 19 * * *
+```
+
+By default Hedwig only scans unread inbox messages. Set `GMAIL_UNREAD_ONLY=false` only for backfills or debugging.
+
+### run in the background with systemd
+
+Install the user service:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/hedwig-digest.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now hedwig-digest.service
+```
+
+Check status and logs:
+
+```bash
+systemctl --user status hedwig-digest.service
+journalctl --user -u hedwig-digest.service -f
+```
+
+Keep the user service alive after logout:
+
+```bash
+loginctl enable-linger "$USER"
 ```
 
 ## discord channel settings

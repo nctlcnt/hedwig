@@ -26,12 +26,13 @@ function buildMessage(digest: DigestReport) {
     `FYI: **${digest.counts.fyi}**`,
     `Course: **${digest.counts.course}**`,
     `Admin: **${digest.counts.admin}**`,
-    `Junk: **${digest.counts.junk}**`
+    `Junk: **${digest.counts.junk}**`,
+    `Accounts: **${digest.accounts.length}**`
   ];
 
   return {
     content: null,
-    embeds: [summaryEmbed(digest, summaryLines), ...sectionEmbeds(digest)],
+    embeds: [summaryEmbed(digest, summaryLines), accountEmbed(digest), ...sectionEmbeds(digest)],
     allowed_mentions: { parse: [] }
   };
 }
@@ -40,9 +41,29 @@ function summaryEmbed(digest: DigestReport, summaryLines: string[]) {
   return {
     title: `Daily Gmail Digest - ${digest.date}`,
     description: summaryLines.join('  |  '),
-    color: digest.counts.action > 0 ? 0xdc2626 : 0x2563eb,
+    color: digest.accounts.some((account) => account.error) ? 0xf59e0b : digest.counts.action > 0 ? 0xdc2626 : 0x2563eb,
     footer: { text: digest.account },
     timestamp: new Date().toISOString()
+  };
+}
+
+function accountEmbed(digest: DigestReport) {
+  return {
+    title: 'Accounts',
+    description: digest.accounts.map((account) => {
+      const status = account.error ? `failed: ${escapeMarkdown(account.error).slice(0, 180)}` : 'ok';
+      return [
+        `**${escapeMarkdown(account.accountName)}** (${escapeMarkdown(account.accountEmail)})`,
+        `total ${account.total}`,
+        `action ${account.counts.action}`,
+        `fyi ${account.counts.fyi}`,
+        `course ${account.counts.course}`,
+        `admin ${account.counts.admin}`,
+        `junk ${account.counts.junk}`,
+        status
+      ].join(' · ');
+    }).join('\n'),
+    color: digest.accounts.some((account) => account.error) ? 0xf59e0b : 0x6b7280
   };
 }
 
@@ -94,7 +115,7 @@ function formatItem(item: DigestItem): string {
   const sender = displaySender(item.from);
   const subject = item.subject.replace(/\s+/g, ' ').trim();
   const summary = item.summary.replace(/\s+/g, ' ').trim();
-  return `**${sender}** - ${escapeMarkdown(summary)}\n   [View in Gmail](${item.gmailUrl}) · ${escapeMarkdown(subject).slice(0, 120)}`;
+  return `**${escapeMarkdown(item.accountName)} / ${sender}** - ${escapeMarkdown(summary)}\n   [View in Gmail](${item.gmailUrl}) · ${escapeMarkdown(subject).slice(0, 120)}`;
 }
 
 function displaySender(from: string): string {
