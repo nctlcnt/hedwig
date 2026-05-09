@@ -1,0 +1,31 @@
+{
+  "name": "hedwig",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "google:auth": "tsx apps/backend/scripts/google-auth.ts",
+    "digest:once": "tsx apps/backend/src/index.ts once",
+    "digest:daemon": "tsx apps/backend/src/index.ts daemon",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "better-sqlite3": "^12.9.0",
+    "dotenv": "^16.4.5",
+    "googleapis": "^140.0.1",
+    "luxon": "^3.5.0",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/luxon": "^3.7.1",
+    "@types/node": "^25.6.2",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}
