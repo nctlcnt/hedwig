@@ -74,7 +74,7 @@ async function runAccountDigest(
       const classification = await classifier.classify(email);
       const selectedLabelId = labelIds.get(classification.gmailLabel);
       if (!selectedLabelId) {
-        throw new Error(`Missing Gmail label id for ${classification.gmailLabel}`);
+        throw new Error(`Missing label id for ${classification.gmailLabel}`);
       }
       await mailGateway.applyLabel(
         accountConfig,
