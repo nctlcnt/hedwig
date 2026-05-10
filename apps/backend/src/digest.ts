@@ -18,7 +18,7 @@ import type {
   DigestReport
 } from './types.js';
 import type { HedwigDb } from './db.js';
-import type { MailAccount, MailGateway } from './mail-gateway.js';
+import type { MailAccount, MailGateway } from './gateway/mail-gateway.js';
 
 type AccountDigestResult = {
   runId: number;
@@ -31,10 +31,10 @@ type AccountDigestResult = {
   error?: string;
 };
 
-export async function runDailyDigest(config: AppConfig, mailGateway: MailGateway, db: HedwigDb): Promise<DigestReport> {
+export async function runDailyDigest(config: AppConfig, db: HedwigDb, mailGateway: MailGateway): Promise<DigestReport> {
   const results: AccountDigestResult[] = [];
 
-  for (const account of await mailGateway.listAccounts()) {
+  for (const account of mailGateway.listAccounts()) {
     results.push(await runAccountDigest(config, account, mailGateway, db));
   }
 
@@ -56,7 +56,7 @@ async function runAccountDigest(
   const digestedMessageIds: string[] = [];
 
   try {
-    account = (await mailGateway.getCurrentUserProfile(accountConfig)).emailAddress;
+    account = await mailGateway.getCurrentUser(accountConfig);
     updateDigestRunAccount(db, runId, account);
     const labelIds = await mailGateway.ensureAutoLabels(accountConfig);
     const refs = await mailGateway.listRecentInboxMessages(accountConfig, config.digest);
@@ -74,7 +74,7 @@ async function runAccountDigest(
       const classification = await classifier.classify(email);
       const selectedLabelId = labelIds.get(classification.gmailLabel);
       if (!selectedLabelId) {
-        throw new Error(`Missing Gmail label id for ${classification.gmailLabel}`);
+        throw new Error(`Missing label id for ${classification.gmailLabel}`);
       }
       await mailGateway.applyLabel(
         accountConfig,
