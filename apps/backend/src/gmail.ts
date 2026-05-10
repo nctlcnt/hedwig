@@ -112,6 +112,18 @@ export async function markMessagesRead(gmail: GmailClient, messageIds: string[])
   });
 }
 
+export async function removeFromInbox(gmail: GmailClient, messageIds: string[]): Promise<void> {
+  if (messageIds.length === 0) return;
+
+  await gmail.users.messages.batchModify({
+    userId: 'me',
+    requestBody: {
+      ids: messageIds,
+      removeLabelIds: ['INBOX']
+    }
+  });
+}
+
 function normalizeMessage(
   message: gmail_v1.Schema$Message,
   account: GmailAccountConfig,

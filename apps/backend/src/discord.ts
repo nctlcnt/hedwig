@@ -3,14 +3,39 @@ import type { AppConfig, Category, DigestItem, DigestReport } from './types.js';
 const DISCORD_API = 'https://discord.com/api/v10';
 
 export async function sendDiscordDigest(config: AppConfig, digest: DigestReport): Promise<void> {
-  const url = `${DISCORD_API}/channels/${config.discord.digestChannelId}/messages`;
+  await sendDiscordMessage(config, config.discord.digestChannelId, buildMessage(digest));
+}
+
+export async function sendDiscordRealtime(config: AppConfig, item: DigestItem): Promise<void> {
+  await sendDiscordMessage(config, config.discord.realtimeChannelId, {
+    content: null,
+    embeds: [{
+      title: '需要及时查看的邮件',
+      description: [
+        `**${escapeMarkdown(item.accountName)} / ${displaySender(item.from)}**`,
+        escapeMarkdown(compactSummary(item)),
+        `mail_id: \`${escapeMarkdown(item.mailId)}\``,
+        `[打开 Gmail](${item.gmailUrl})`
+      ].join('\n'),
+      color: sectionColor('action'),
+      timestamp: new Date().toISOString()
+    }],
+    allowed_mentions: { parse: [] }
+  });
+}
+
+async function sendDiscordMessage(config: AppConfig, channelId: string, body: unknown): Promise<void> {
+  if (!channelId) {
+    throw new Error('Discord channel id is required');
+  }
+  const url = `${DISCORD_API}/channels/${channelId}/messages`;
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bot ${config.discord.botToken}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(buildMessage(digest))
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
@@ -148,7 +173,7 @@ function formatCategoryParagraph(title: string, items: DigestItem[], lead: strin
 
   const topItems = items.slice(0, 5).map((item) => {
     const sender = displaySender(item.from);
-    return `${sender}：${escapeMarkdown(compactSummary(item))}`;
+    return `${sender}：${escapeMarkdown(compactSummary(item))} (${escapeMarkdown(item.mailId)})`;
   });
   const remainder = items.length > topItems.length ? `另有 ${items.length - topItems.length} 封未展开。` : '';
   return [
@@ -171,7 +196,7 @@ function formatReportItem(item: DigestItem): string {
   const sender = displaySender(item.from);
   const account = escapeMarkdown(item.accountName);
   const summary = escapeMarkdown(compactSummary(item));
-  return `**${account} / ${sender}**：${summary} [打开](${item.gmailUrl})`;
+  return `**${account} / ${sender}**：${summary} · mail_id: \`${escapeMarkdown(item.mailId)}\` [打开](${item.gmailUrl})`;
 }
 
 function compactSummary(item: DigestItem): string {

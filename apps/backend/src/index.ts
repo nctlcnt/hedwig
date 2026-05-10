@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { loadConfig } from './config.js';
-import { runDailyDigest } from './digest.js';
+import { processUnreadMail, runDailyDigest, sendTodayDigest } from './digest.js';
 import { openDatabase } from './db.js';
 import { createGmailMailGateway } from './gateway/gmail-mail-gateway.js';
 
@@ -22,11 +22,22 @@ if (mode === 'once') {
     process.exitCode = 1;
   });
 } else if (mode === 'daemon') {
+  console.log(`Scheduling unread mail processing with "${config.digest.processCron}" in ${config.digest.timezone}`);
+  cron.schedule(
+    config.digest.processCron,
+    () => {
+      processUnreadMail(config, db, mailGateway).catch((error) => {
+        console.error(error);
+      });
+    },
+    { timezone: config.digest.timezone }
+  );
+
   console.log(`Scheduling digest with "${config.digest.cron}" in ${config.digest.timezone}`);
   cron.schedule(
     config.digest.cron,
     () => {
-      run().catch((error) => {
+      sendTodayDigest(config, db).catch((error) => {
         console.error(error);
       });
     },

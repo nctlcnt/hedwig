@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
-import type { AppConfig, Classification, EmailMessage } from './types.js';
+import type { AppConfig, Category, Classification, DigestItem, EmailMessage, ProcessingAction } from './types.js';
 
 export type HedwigDb = DatabaseType;
 
@@ -80,13 +80,14 @@ export function saveClassification(
   db: HedwigDb,
   runId: number,
   email: EmailMessage,
-  classification: Classification
+  classification: Classification,
+  processedAs: ProcessingAction
 ): void {
   db.prepare(`
     insert into message_classifications (
-      run_id, account_id, gmail_id, category, summary, importance, confidence, provider, reason, created_at
+      run_id, account_id, gmail_id, category, summary, importance, confidence, provider, reason, processed_as, processed_at, created_at
     )
-    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     runId,
     email.accountId,
@@ -97,8 +98,76 @@ export function saveClassification(
     classification.confidence,
     classification.provider,
     classification.reason || '',
+    processedAs,
+    new Date().toISOString(),
     new Date().toISOString()
   );
+}
+
+export function listProcessedDigestItems(
+  db: HedwigDb,
+  start: Date,
+  end: Date
+): DigestItem[] {
+  const rows = db.prepare(`
+    select
+      m.account_id as accountId,
+      m.account as accountEmail,
+      m.gmail_id as id,
+      m.sender as sender,
+      m.subject as subject,
+      m.gmail_url as gmailUrl,
+      c.category as category,
+      c.summary as summary,
+      c.importance as importance,
+      c.confidence as confidence,
+      c.provider as provider,
+      c.processed_as as processedAs,
+      c.processed_at as processedAt
+    from message_classifications c
+    join messages m
+      on m.account_id = c.account_id
+      and m.gmail_id = c.gmail_id
+    join (
+      select account_id, gmail_id, max(id) as id
+      from message_classifications
+      where processed_at >= ? and processed_at < ?
+      group by account_id, gmail_id
+    ) latest
+      on latest.account_id = c.account_id
+      and latest.gmail_id = c.gmail_id
+      and latest.id = c.id
+    order by c.importance desc, c.processed_at desc
+  `).all(start.toISOString(), end.toISOString()) as Array<{
+    accountId: string;
+    accountEmail: string;
+    id: string;
+    sender: string;
+    subject: string;
+    gmailUrl: string;
+    category: Category;
+    summary: string;
+    importance: number;
+    confidence: number;
+    provider: string;
+    processedAs: ProcessingAction;
+  }>;
+
+  return rows.map((row) => ({
+    accountId: row.accountId,
+    accountName: row.accountEmail,
+    mailId: `${row.accountId}:${row.id}`,
+    id: row.id,
+    category: row.category,
+    from: row.sender,
+    subject: row.subject,
+    summary: row.summary,
+    importance: row.importance,
+    confidence: row.confidence,
+    provider: row.provider,
+    processedAs: row.processedAs,
+    gmailUrl: row.gmailUrl
+  }));
 }
 
 function migrate(db: HedwigDb): void {
@@ -144,6 +213,8 @@ function migrate(db: HedwigDb): void {
       confidence real not null,
       provider text not null,
       reason text not null default '',
+      processed_as text not null default 'digest_only' check (processed_as in ('archive', 'digest_only', 'push_now')),
+      processed_at text not null default CURRENT_TIMESTAMP,
       created_at text not null
     );
 
@@ -156,6 +227,9 @@ function migrate(db: HedwigDb): void {
 
   addColumnIfMissing(db, 'digest_runs', 'account_id', "text not null default 'primary'");
   addColumnIfMissing(db, 'message_classifications', 'account_id', "text not null default 'primary'");
+  addColumnIfMissing(db, 'message_classifications', 'processed_as', "text not null default 'digest_only'");
+  addColumnIfMissing(db, 'message_classifications', 'processed_at', 'text');
+  backfillProcessedAt(db);
 }
 
 function migrateMessagesToAccountScopedKeys(db: HedwigDb): void {
@@ -204,13 +278,15 @@ function migrateMessagesToAccountScopedKeys(db: HedwigDb): void {
           confidence real not null,
           provider text not null,
           reason text not null default '',
+          processed_as text not null default 'digest_only' check (processed_as in ('archive', 'digest_only', 'push_now')),
+          processed_at text not null default CURRENT_TIMESTAMP,
           created_at text not null
         );
 
         insert into message_classifications (
-          id, run_id, account_id, gmail_id, category, summary, importance, confidence, provider, reason, created_at
+          id, run_id, account_id, gmail_id, category, summary, importance, confidence, provider, reason, processed_as, processed_at, created_at
         )
-        select id, run_id, 'primary', gmail_id, category, summary, importance, confidence, provider, reason, created_at
+        select id, run_id, 'primary', gmail_id, category, summary, importance, confidence, provider, reason, 'digest_only', created_at, created_at
         from message_classifications_legacy_single_account;
 
         drop table message_classifications_legacy_single_account;
@@ -228,6 +304,15 @@ function migrateMessagesToAccountScopedKeys(db: HedwigDb): void {
 function addColumnIfMissing(db: HedwigDb, table: string, column: string, definition: string): void {
   if (tableColumns(db, table).includes(column)) return;
   db.exec(`alter table ${table} add column ${column} ${definition};`);
+}
+
+function backfillProcessedAt(db: HedwigDb): void {
+  if (!tableColumns(db, 'message_classifications').includes('processed_at')) return;
+  db.prepare(`
+    update message_classifications
+    set processed_at = created_at
+    where processed_at is null or processed_at = ''
+  `).run();
 }
 
 function tableColumns(db: HedwigDb, table: string): string[] {

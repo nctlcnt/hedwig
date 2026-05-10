@@ -1,6 +1,7 @@
 import type { gmail_v1 } from 'googleapis';
 
 export type Category = 'action' | 'fyi' | 'course' | 'admin' | 'junk';
+export type ProcessingAction = 'archive' | 'digest_only' | 'push_now';
 
 export type AppConfig = {
   google: {
@@ -12,10 +13,12 @@ export type AppConfig = {
   discord: {
     botToken: string;
     digestChannelId: string;
+    realtimeChannelId: string;
   };
   digest: {
     timezone: string;
     cron: string;
+    processCron: string;
     lookbackHours: number;
     maxMessages: number;
     unreadOnly: boolean;
@@ -68,13 +71,16 @@ export type Classification = {
 export type DigestItem = {
   accountId: string;
   accountName: string;
+  mailId: string;
   id: string;
+  category: Category;
   from: string;
   subject: string;
   summary: string;
   importance: number;
   confidence: number;
   provider: string;
+  processedAs: ProcessingAction;
   gmailUrl: string;
 };
 
