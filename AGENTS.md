@@ -39,6 +39,20 @@ npm run check
 
 When adding behavior with meaningful branching, add focused tests and a matching npm script in `package.json`. Prefer tests near the backend module they cover, using names like `digest.test.ts` or `classifier.test.ts`.
 
+## Linear Issue Naming
+
+Use project milestones, labels, parent issues, or descriptions to express phases.
+Do not make `Phase 1`, `阶段 2`, or similar phase numbers the primary issue
+title. Issue titles should describe the concrete deliverable so they remain clear
+outside the project plan.
+
+Prefer `verb + object + outcome` titles, for example:
+
+- `Fetch unread Gmail messages for digesting`
+- `Classify emails with Gemini provider`
+- `Send daily digest to Discord`
+- `Write confirmed email events to Google Calendar`
+
 ## Commit & Pull Request Guidelines
 
 ### Commits
@@ -53,6 +67,36 @@ When adding behavior with meaningful branching, add focused tests and a matching
 - Type: `feat` / `fix` / `chore` / `refactor`
 - Issue ID in branch handles the linking — no need to repeat in every commit
 - Delete after merge
+
+## Pull Requests
+
+### Title
+- Imperative, ≤ 60 chars, mirrors the final commit subject
+- Append issue ID in parens: `Build Gmail digest backend (HED-123)`
+- Avoid vague verbs: no `Update`, `Improve`, `Refactor stuff`,
+  `Implement changes`. Say *what* changed.
+
+### Body
+Use exactly these sections, in order:
+
+**Summary**
+1-3 sentences on what changed and why. No bullet lists of every
+file touched. 
+
+**Verification**
+Concrete steps you ran, with results. Not `tested locally`.
+
+**Notes** (optional)
+Follow-ups, known issues, anything reviewers should know.
+
+Then a `Linear:` line with the full issue URL.
+
+End with `Fixes HED-123` on its own line.
+
+### Don't
+- Don't restate the diff (`Changed line 42 in x.ts to...`)
+- Don't include screenshots unless UI changed
+- Don't write `This PR does the following:` preambles
 
 ## Security & Configuration Tips
 
