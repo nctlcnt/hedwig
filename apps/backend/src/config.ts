@@ -29,9 +29,9 @@ function boolean(name: string, fallback: boolean): boolean {
 }
 
 export function loadConfig(): AppConfig {
-  const rawProvider = process.env.CLASSIFIER_PROVIDER || (process.env.GEMINI_API_KEY ? 'gemini' : 'rule');
-  if (rawProvider !== 'rule' && rawProvider !== 'gemini') {
-    throw new Error(`CLASSIFIER_PROVIDER must be "rule" or "gemini", got: ${rawProvider}`);
+  const rawProvider = process.env.CLASSIFIER_PROVIDER || (process.env.DEEPSEEK_API_KEY ? 'deepseek' : 'rule');
+  if (rawProvider !== 'rule' && rawProvider !== 'deepseek') {
+    throw new Error(`CLASSIFIER_PROVIDER must be "rule" or "deepseek", got: ${rawProvider}`);
   }
 
   return {
@@ -56,9 +56,9 @@ export function loadConfig(): AppConfig {
     },
     classifier: {
       provider: rawProvider,
-      gemini: {
-        apiKey: process.env.GEMINI_API_KEY || '',
-        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash'
+      deepseek: {
+        apiKey: process.env.DEEPSEEK_API_KEY || '',
+        model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro'
       }
     },
     database: {

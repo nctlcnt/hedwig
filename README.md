@@ -44,16 +44,16 @@ cp .env.example .env
 npm install
 ```
 
-Fill `.env` with Gmail OAuth client refresh token values, the Hedwig Discord bot token/channel, and optionally Gemini:
+Fill `.env` with Gmail OAuth client refresh token values, the Hedwig Discord bot token/channel, and optionally DeepSeek:
 
 ```text
-CLASSIFIER_PROVIDER=gemini
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
+CLASSIFIER_PROVIDER=deepseek
+DEEPSEEK_API_KEY=
+DEEPSEEK_MODEL=deepseek-v4-pro
 ```
 
-Use `CLASSIFIER_PROVIDER=rule` to run without Gemini.
-If Gemini returns `SERVICE_DISABLED`, enable `generativelanguage.googleapis.com` for the Google Cloud project that owns the API key.
+Use `CLASSIFIER_PROVIDER=rule` to run without DeepSeek.
+DeepSeek is called via the OpenAI-compatible endpoint at `https://api.deepseek.com`.
 
 Required Gmail OAuth scope:
 

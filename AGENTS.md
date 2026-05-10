@@ -100,7 +100,7 @@ End with `Fixes HED-123` on its own line.
 
 ## Security & Configuration Tips
 
-Copy `.env.example` to `.env` and keep secrets out of git. Required integrations include Gmail OAuth credentials and Discord bot/channel values; Gemini is optional when `CLASSIFIER_PROVIDER=rule`. The Gmail scope should remain `https://www.googleapis.com/auth/gmail.modify`; the service labels messages and marks digested messages read, but must not reply, delete, archive, trash, or access Drive.
+Copy `.env.example` to `.env` and keep secrets out of git. Required integrations include Gmail OAuth credentials and Discord bot/channel values; DeepSeek is optional when `CLASSIFIER_PROVIDER=rule`. The Gmail scope should remain `https://www.googleapis.com/auth/gmail.modify`; the service labels messages and marks digested messages read, but must not reply, delete, archive, trash, or access Drive.
 
 ## Linear connection
 本项目的 issue 跟踪在 Linear 上

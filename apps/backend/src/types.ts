@@ -24,8 +24,8 @@ export type AppConfig = {
     unreadOnly: boolean;
   };
   classifier: {
-    provider: 'rule' | 'gemini';
-    gemini: {
+    provider: 'rule' | 'deepseek';
+    deepseek: {
       apiKey: string;
       model: string;
     };

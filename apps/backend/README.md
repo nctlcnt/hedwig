@@ -17,7 +17,7 @@ Gmail state is intentionally minimal:
 Current providers:
 
 - `rule`: local conservative rules
-- `gemini`: Gemini structured JSON classification with rule fallback
+- `deepseek`: DeepSeek JSON-mode classification (OpenAI-compatible endpoint) with rule fallback
 
 Run from the repo root:
 
