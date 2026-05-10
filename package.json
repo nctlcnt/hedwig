@@ -9,6 +9,7 @@
     "digest:daemon": "tsx apps/backend/src/index.ts daemon",
     "probe:deepseek": "tsx apps/backend/scripts/deepseek-probe.ts",
     "probe:unread": "tsx apps/backend/scripts/unread-probe.ts",
+    "backfill:unread": "tsx apps/backend/scripts/backfill-unread.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {

@@ -4,6 +4,7 @@ import {
   getCurrentUser,
   getMessage,
   listRecentInboxMessages,
+  listUnreadInboxMessages,
   markMessagesRead,
   removeFromInbox
 } from '../gmail.js';
@@ -39,6 +40,10 @@ class GmailMailGateway implements MailGateway {
 
   async listRecentInboxMessages(account: MailAccount, options: MailListOptions): Promise<MailMessageRef[]> {
     return listRecentInboxMessages(this.clientFor(account), options);
+  }
+
+  async listUnreadInboxMessages(account: MailAccount, options: { limit: number }): Promise<MailMessageRef[]> {
+    return listUnreadInboxMessages(this.clientFor(account), options.limit);
   }
 
   async getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage> {

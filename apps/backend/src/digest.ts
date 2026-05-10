@@ -53,6 +53,21 @@ export async function processUnreadMail(
   return results;
 }
 
+export async function backfillUnreadMail(
+  config: AppConfig,
+  db: HedwigDb,
+  mailGateway: MailGateway,
+  limitPerAccount: number
+): Promise<AccountProcessResult[]> {
+  const results: AccountProcessResult[] = [];
+
+  for (const account of mailGateway.listAccounts()) {
+    results.push(await backfillAccountUnreadMail(config, account, mailGateway, db, limitPerAccount));
+  }
+
+  return results;
+}
+
 export async function sendTodayDigest(
   config: AppConfig,
   db: HedwigDb,
@@ -71,6 +86,33 @@ async function processAccountUnreadMail(
   mailGateway: MailGateway,
   db: HedwigDb
 ): Promise<AccountProcessResult> {
+  return runAccountClassificationPass(config, accountConfig, mailGateway, db, async () => (
+    mailGateway.listRecentInboxMessages(accountConfig, {
+      ...config.digest,
+      unreadOnly: true
+    })
+  ));
+}
+
+async function backfillAccountUnreadMail(
+  config: AppConfig,
+  accountConfig: MailAccount,
+  mailGateway: MailGateway,
+  db: HedwigDb,
+  limit: number
+): Promise<AccountProcessResult> {
+  return runAccountClassificationPass(config, accountConfig, mailGateway, db, async () => (
+    mailGateway.listUnreadInboxMessages(accountConfig, { limit })
+  ));
+}
+
+async function runAccountClassificationPass(
+  config: AppConfig,
+  accountConfig: MailAccount,
+  mailGateway: MailGateway,
+  db: HedwigDb,
+  fetchRefs: () => Promise<{ id?: string | null }[]>
+): Promise<AccountProcessResult> {
   let account = accountConfig.displayName;
   const runId = createDigestRun(db, accountConfig.id, account, new Date());
   const counts = zeroCounts();
@@ -79,10 +121,7 @@ async function processAccountUnreadMail(
   try {
     account = await mailGateway.getCurrentUser(accountConfig);
     updateDigestRunAccount(db, runId, account);
-    const refs = await mailGateway.listRecentInboxMessages(accountConfig, {
-      ...config.digest,
-      unreadOnly: true
-    });
+    const refs = await fetchRefs();
 
     for (const ref of refs) {
       if (!ref.id) continue;

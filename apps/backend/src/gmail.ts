@@ -56,6 +56,19 @@ export async function listRecentInboxMessages(
   return response.data.messages || [];
 }
 
+export async function listUnreadInboxMessages(
+  gmail: GmailClient,
+  limit: number
+): Promise<gmail_v1.Schema$Message[]> {
+  const response = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults: limit,
+    q: 'in:inbox is:unread -in:spam -in:trash'
+  });
+
+  return response.data.messages || [];
+}
+
 export async function getMessage(
   gmail: GmailClient,
   account: GmailAccountConfig,

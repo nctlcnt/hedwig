@@ -20,6 +20,7 @@ export type MailGateway = {
   getCurrentUser(account: MailAccount): Promise<string>;
   ensureFollowupLabel(account: MailAccount): Promise<string>;
   listRecentInboxMessages(account: MailAccount, options: MailListOptions): Promise<MailMessageRef[]>;
+  listUnreadInboxMessages(account: MailAccount, options: { limit: number }): Promise<MailMessageRef[]>;
   getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage>;
   markMessagesRead(account: MailAccount, messageIds: string[]): Promise<void>;
   removeFromInbox(account: MailAccount, messageIds: string[]): Promise<void>;
