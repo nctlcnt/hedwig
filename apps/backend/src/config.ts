@@ -43,11 +43,13 @@ export function loadConfig(): AppConfig {
     },
     discord: {
       botToken: required('DISCORD_BOT_TOKEN'),
-      digestChannelId: required('DISCORD_DIGEST_CHANNEL_ID')
+      digestChannelId: required('DISCORD_DIGEST_CHANNEL_ID'),
+      realtimeChannelId: process.env.DISCORD_REALTIME_CHANNEL_ID || process.env.DISCORD_DIGEST_CHANNEL_ID || ''
     },
     digest: {
       timezone: process.env.DIGEST_TIMEZONE || 'Australia/Sydney',
       cron: process.env.DIGEST_CRON || '0 19 * * *',
+      processCron: process.env.DIGEST_PROCESS_CRON || '*/5 * * * *',
       lookbackHours: integer('GMAIL_LOOKBACK_HOURS', 24),
       maxMessages: integer('GMAIL_MAX_MESSAGES', 100),
       unreadOnly: boolean('GMAIL_UNREAD_ONLY', true)

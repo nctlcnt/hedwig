@@ -25,4 +25,5 @@ export type MailGateway = {
   getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage>;
   applyLabel(account: MailAccount, messageId: string, labelId: string, removeLabelIds?: string[]): Promise<void>;
   markMessagesRead(account: MailAccount, messageIds: string[]): Promise<void>;
+  removeFromInbox(account: MailAccount, messageIds: string[]): Promise<void>;
 };

@@ -5,7 +5,8 @@ import {
   getCurrentUser,
   getMessage,
   listRecentInboxMessages,
-  markMessagesRead
+  markMessagesRead,
+  removeFromInbox
 } from '../gmail.js';
 import type { AppConfig, EmailMessage, GmailAccountConfig, GmailClient } from '../types.js';
 import type { MailAccount, MailGateway, MailListOptions, MailMessageRef } from './mail-gateway.js';
@@ -51,6 +52,10 @@ class GmailMailGateway implements MailGateway {
 
   async markMessagesRead(account: MailAccount, messageIds: string[]): Promise<void> {
     await markMessagesRead(this.clientFor(account), messageIds);
+  }
+
+  async removeFromInbox(account: MailAccount, messageIds: string[]): Promise<void> {
+    await removeFromInbox(this.clientFor(account), messageIds);
   }
 
   private clientFor(account: MailAccount): GmailClient {
