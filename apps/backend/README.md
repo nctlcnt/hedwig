@@ -2,6 +2,8 @@
 
 Node service for multi-account Gmail digest, Gmail labels, Discord delivery, and classifier providers.
 
+Hedwig's digest flow depends on the internal `MailGateway` boundary instead of importing Gmail API helpers directly. The current gateway implementation is still Gmail-backed and uses the same OAuth/config/token files, but the product layer now treats personal mail access as a replaceable adapter.
+
 Current providers:
 
 - `rule`: local conservative rules

@@ -2,13 +2,15 @@ import cron from 'node-cron';
 import { loadConfig } from './config.js';
 import { runDailyDigest } from './digest.js';
 import { openDatabase } from './db.js';
+import { createGmailMailGateway } from './gmail-mail-gateway.js';
 
 const mode = process.argv[2] || 'once';
 const config = loadConfig();
 const db = openDatabase(config);
+const mailGateway = createGmailMailGateway(config);
 
 async function run(): Promise<void> {
-  const digest = await runDailyDigest(config, db);
+  const digest = await runDailyDigest(config, mailGateway, db);
   console.log(
     `Sent digest #${digest.runIds.join(',')} for ${digest.account}: total=${digest.total}, action=${digest.counts.action}, fyi=${digest.counts.fyi}, course=${digest.counts.course}, admin=${digest.counts.admin}, junk=${digest.counts.junk}`
   );

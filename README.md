@@ -23,12 +23,14 @@ apps/
   backend/
     prompts/              # LLM prompts
     scripts/              # one-off auth/setup scripts
-    src/                  # Gmail, Discord, digest, classifier providers
+    src/                  # digest product logic, MailGateway adapter, Discord, classifiers
   frontend/
     README.md             # reserved for a future admin UI
 ```
 
 The current product surface is backend-only. `apps/frontend` exists so the repo shape is clear before adding UI.
+
+Hedwig is the email digest product layer. Mail access is isolated behind the internal `MailGateway` interface in `apps/backend/src/mail-gateway.ts`; the current adapter in `apps/backend/src/gmail-mail-gateway.ts` still calls the existing Gmail API helpers and OAuth token configuration. This keeps Gmail behavior unchanged while leaving a clear future boundary for a standalone personal data gateway service.
 
 ### setup
 
