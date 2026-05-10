@@ -7,6 +7,8 @@
     "google:auth": "tsx apps/backend/scripts/google-auth.ts",
     "digest:once": "tsx apps/backend/src/index.ts once",
     "digest:daemon": "tsx apps/backend/src/index.ts daemon",
+    "probe:deepseek": "tsx apps/backend/scripts/deepseek-probe.ts",
+    "probe:unread": "tsx apps/backend/scripts/unread-probe.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {
