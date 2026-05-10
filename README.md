@@ -138,6 +138,24 @@ DIGEST_CRON=0 19 * * *
 
 By default Hedwig only scans unread inbox messages. Set `GMAIL_UNREAD_ONLY=false` only for backfills or debugging.
 
+The cron path (`digest:daemon` and `digest:once`) only considers unread mail inside the `GMAIL_LOOKBACK_HOURS` window. Older unread mail is left alone — drain it explicitly with `backfill:unread`.
+
+### backfill older unread mail
+
+```bash
+npm run backfill:unread        # 30 most-recent unread per account
+npm run backfill:unread 1      # smoke test: 1 message per account
+```
+
+`backfill:unread` ignores `GMAIL_LOOKBACK_HOURS` and reuses the same pipeline as the daemon (classify, Discord push, SQLite, mark read, Inbox cleanup). Run `backfill:unread 1` after changing the classifier provider or model to verify the DeepSeek end-to-end path against real Gmail with minimal side effects.
+
+### probe scripts
+
+```bash
+npm run probe:deepseek   # synthetic email through the DeepSeek classifier
+npm run probe:unread     # per-account unread counts in/out of the lookback window
+```
+
 ### run in the background with systemd
 
 Install the user service:

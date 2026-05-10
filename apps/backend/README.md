@@ -29,6 +29,19 @@ npm run google:auth
 
 `digest:daemon` processes unread mail every `DIGEST_PROCESS_CRON` interval, defaulting to `*/5 * * * *`, and sends the daily digest at `DIGEST_CRON`. Action-classified messages are pushed immediately to `DISCORD_REALTIME_CHANNEL_ID` when set, otherwise the digest channel is used. All processed messages that are not starred are marked read and removed from Inbox.
 
+The cron path (`digest:daemon` and `digest:once`) only looks at unread mail inside the `GMAIL_LOOKBACK_HOURS` window, so older unread backlog is intentionally ignored.
+
+## Backfill and probes
+
+```bash
+npm run backfill:unread        # 30 most-recent unread per account
+npm run backfill:unread 1      # smoke test: 1 message per account
+npm run probe:deepseek         # synthetic classification, asserts provider=deepseek
+npm run probe:unread           # per-account unread counts in/out of the lookback window
+```
+
+`backfill:unread` ignores `GMAIL_LOOKBACK_HOURS` and reuses the same classify + Discord + SQLite + mark-read pipeline as the daemon. Use `backfill:unread 1` to verify the DeepSeek end-to-end path against real Gmail with minimal side effects.
+
 For multiple Gmail accounts, prefer JSON token files:
 
 ```bash
