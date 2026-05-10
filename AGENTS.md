@@ -57,3 +57,11 @@ When adding behavior with meaningful branching, add focused tests and a matching
 ## Security & Configuration Tips
 
 Copy `.env.example` to `.env` and keep secrets out of git. Required integrations include Gmail OAuth credentials and Discord bot/channel values; Gemini is optional when `CLASSIFIER_PROVIDER=rule`. The Gmail scope should remain `https://www.googleapis.com/auth/gmail.modify`; the service labels messages and marks digested messages read, but must not reply, delete, archive, trash, or access Drive.
+
+## Linear connection
+本项目的 issue 跟踪在 Linear 上
+每次get issue时，使用两个步骤：
+1. Linear:get_issue(id="LIN-123")          # 拿 issue 主体
+2. Linear:list_comments(issueId="LIN-123") # 再拿评论列表
+评论列表里面是需求变更记录，和一些讨论，甚至有时会有新的需求冒出来，比description更活跃，所以需要单独拿，并且评估和implement。
+先看 Linear Operating Manual，或者在 Linear 里搜索这个标题，依据里面的规范来管理 issue 和 comment。
