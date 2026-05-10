@@ -1,7 +1,6 @@
 import {
-  applyLabel,
   createGmailClient,
-  ensureAutoLabels,
+  ensureFollowupLabel,
   getCurrentUser,
   getMessage,
   listRecentInboxMessages,
@@ -34,8 +33,8 @@ class GmailMailGateway implements MailGateway {
     return getCurrentUser(this.clientFor(account));
   }
 
-  async ensureAutoLabels(account: MailAccount): Promise<Map<string, string>> {
-    return ensureAutoLabels(this.clientFor(account));
+  async ensureFollowupLabel(account: MailAccount): Promise<string> {
+    return ensureFollowupLabel(this.clientFor(account));
   }
 
   async listRecentInboxMessages(account: MailAccount, options: MailListOptions): Promise<MailMessageRef[]> {
@@ -44,10 +43,6 @@ class GmailMailGateway implements MailGateway {
 
   async getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage> {
     return getMessage(this.clientFor(account), this.configFor(account), accountEmail, id);
-  }
-
-  async applyLabel(account: MailAccount, messageId: string, labelId: string, removeLabelIds: string[] = []): Promise<void> {
-    await applyLabel(this.clientFor(account), messageId, labelId, removeLabelIds);
   }
 
   async markMessagesRead(account: MailAccount, messageIds: string[]): Promise<void> {

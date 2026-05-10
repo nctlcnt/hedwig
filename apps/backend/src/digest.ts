@@ -79,14 +79,10 @@ async function processAccountUnreadMail(
   try {
     account = await mailGateway.getCurrentUser(accountConfig);
     updateDigestRunAccount(db, runId, account);
-    const labelIds = await mailGateway.ensureAutoLabels(accountConfig);
     const refs = await mailGateway.listRecentInboxMessages(accountConfig, {
       ...config.digest,
       unreadOnly: true
     });
-    const categoryLabelIds = Object.values(categories())
-      .map((category) => labelIds.get(category.label))
-      .filter((id): id is string => Boolean(id));
 
     for (const ref of refs) {
       if (!ref.id) continue;
@@ -96,23 +92,12 @@ async function processAccountUnreadMail(
       }
 
       const classification = await classifier.classify(email);
-      const selectedLabelId = labelIds.get(classification.gmailLabel);
-      if (!selectedLabelId) {
-        throw new Error(`Missing label id for ${classification.gmailLabel}`);
-      }
-
-      await mailGateway.applyLabel(
-        accountConfig,
-        email.id,
-        selectedLabelId,
-        categoryLabelIds.filter((id) => id !== selectedLabelId)
-      );
-
       const processedAs = processingAction(classification.category);
 
-      if (processedAs === 'archive') {
+      if (!shouldKeepInInbox(email)) {
         await mailGateway.removeFromInbox(accountConfig, [email.id]);
-      } else if (processedAs === 'push_now') {
+      }
+      if (processedAs === 'push_now') {
         await sendDiscordRealtime(config, digestItem(accountConfig, account, email, classification, processedAs));
       }
 
@@ -174,6 +159,10 @@ function processingAction(category: Category): ProcessingAction {
   if (category === 'junk') return 'archive';
   if (category === 'action') return 'push_now';
   return 'digest_only';
+}
+
+function shouldKeepInInbox(email: EmailMessage): boolean {
+  return email.labelIds.includes('STARRED');
 }
 
 function emptyGroups(): Record<Category, DigestItem[]> {

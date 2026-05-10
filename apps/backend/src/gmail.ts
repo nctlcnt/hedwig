@@ -2,14 +2,7 @@ import { google } from 'googleapis';
 import type { gmail_v1 } from 'googleapis';
 import type { AppConfig, EmailMessage, GmailAccountConfig, GmailClient } from './types.js';
 
-const AUTO_LABELS = [
-  'AUTO/action',
-  'AUTO/fyi',
-  'AUTO/course',
-  'AUTO/admin',
-  'AUTO/junk',
-  'AUTO/digest'
-];
+const FOLLOWUP_LABEL = 'Hedwig/Followup';
 
 export function createGmailClient(config: AppConfig, account: GmailAccountConfig): GmailClient {
   const auth = new google.auth.OAuth2(
@@ -26,33 +19,26 @@ export async function getCurrentUser(gmail: GmailClient): Promise<string> {
   return response.data.emailAddress || 'me';
 }
 
-export async function ensureAutoLabels(gmail: GmailClient): Promise<Map<string, string>> {
+export async function ensureFollowupLabel(gmail: GmailClient): Promise<string> {
   const existing = await gmail.users.labels.list({ userId: 'me' });
   const byName = new Map((existing.data.labels || []).map((label) => [label.name, label]));
-  const labels = new Map<string, string>();
-
-  for (const name of AUTO_LABELS) {
-    const current = byName.get(name);
-    if (current?.id) {
-      labels.set(name, current.id);
-      continue;
-    }
-
-    const created = await gmail.users.labels.create({
-      userId: 'me',
-      requestBody: {
-        name,
-        labelListVisibility: 'labelShow',
-        messageListVisibility: 'show'
-      }
-    });
-    if (!created.data.id) {
-      throw new Error(`Gmail did not return an id for created label: ${name}`);
-    }
-    labels.set(name, created.data.id);
+  const current = byName.get(FOLLOWUP_LABEL);
+  if (current?.id) {
+    return current.id;
   }
 
-  return labels;
+  const created = await gmail.users.labels.create({
+    userId: 'me',
+    requestBody: {
+      name: FOLLOWUP_LABEL,
+      labelListVisibility: 'labelShow',
+      messageListVisibility: 'show'
+    }
+  });
+  if (!created.data.id) {
+    throw new Error(`Gmail did not return an id for created label: ${FOLLOWUP_LABEL}`);
+  }
+  return created.data.id;
 }
 
 export async function listRecentInboxMessages(
@@ -82,22 +68,6 @@ export async function getMessage(
     format: 'full'
   });
   return normalizeMessage(response.data, account, accountEmail);
-}
-
-export async function applyLabel(
-  gmail: GmailClient,
-  messageId: string,
-  labelId: string,
-  removeLabelIds: string[] = []
-): Promise<void> {
-  await gmail.users.messages.modify({
-    userId: 'me',
-    id: messageId,
-    requestBody: {
-      addLabelIds: [labelId],
-      removeLabelIds
-    }
-  });
 }
 
 export async function markMessagesRead(gmail: GmailClient, messageIds: string[]): Promise<void> {

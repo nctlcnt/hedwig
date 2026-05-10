@@ -9,8 +9,6 @@ export type MailMessageRef = {
   id?: string | null;
 };
 
-export type MailLabelMap = Map<string, string>;
-
 export type MailListOptions = {
   lookbackHours: number;
   maxMessages: number;
@@ -20,10 +18,9 @@ export type MailListOptions = {
 export type MailGateway = {
   listAccounts(): MailAccount[];
   getCurrentUser(account: MailAccount): Promise<string>;
-  ensureAutoLabels(account: MailAccount): Promise<MailLabelMap>;
+  ensureFollowupLabel(account: MailAccount): Promise<string>;
   listRecentInboxMessages(account: MailAccount, options: MailListOptions): Promise<MailMessageRef[]>;
   getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage>;
-  applyLabel(account: MailAccount, messageId: string, labelId: string, removeLabelIds?: string[]): Promise<void>;
   markMessagesRead(account: MailAccount, messageIds: string[]): Promise<void>;
   removeFromInbox(account: MailAccount, messageIds: string[]): Promise<void>;
 };

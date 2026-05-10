@@ -2,26 +2,21 @@ import type { Category, Classification, EmailMessage } from './types.js';
 
 const CATEGORIES = {
   action: {
-    label: 'AUTO/action',
     title: 'Action'
   },
   fyi: {
-    label: 'AUTO/fyi',
     title: 'FYI'
   },
   course: {
-    label: 'AUTO/course',
     title: 'Course'
   },
   admin: {
-    label: 'AUTO/admin',
     title: 'Admin'
   },
   junk: {
-    label: 'AUTO/junk',
     title: 'Junk'
   }
-} satisfies Record<Category, { label: string; title: string }>;
+} satisfies Record<Category, { title: string }>;
 
 const CATEGORY_ORDER: Category[] = ['action', 'fyi', 'course', 'admin', 'junk'];
 
@@ -164,7 +159,6 @@ export function classifyEmail(email: EmailMessage): Classification {
 
   return {
     category,
-    gmailLabel: CATEGORIES[category].label,
     importance: importanceScore(category, email, haystack),
     summary: summarize(email),
     confidence: 0.55,
@@ -198,7 +192,6 @@ export function normalizeClassification(
 
   return {
     category,
-    gmailLabel: CATEGORIES[category].label,
     importance,
     summary,
     confidence,

@@ -60,7 +60,6 @@ export type EmailMessage = {
 
 export type Classification = {
   category: Category;
-  gmailLabel: string;
   importance: number;
   summary: string;
   confidence: number;
