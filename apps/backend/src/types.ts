@@ -87,6 +87,7 @@ export type DigestSection = {
   category: Category;
   title: string;
   items: DigestItem[];
+  lead?: string;
 };
 
 export type DigestAccountSummary = {

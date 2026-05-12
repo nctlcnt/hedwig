@@ -11,6 +11,7 @@ import {
   updateDigestRunAccount
 } from './db.js';
 import { sendDiscordDigest, sendDiscordRealtime } from './discord.js';
+import { summarizeSections } from './llm/section-narrator.js';
 import type {
   AppConfig,
   Category,
@@ -75,7 +76,7 @@ export async function sendTodayDigest(
 ): Promise<DigestReport> {
   const window = todayWindow(config);
   const items = listProcessedDigestItems(db, window.start, window.end);
-  const digest = buildDigest(config, items, results);
+  const digest = await buildDigest(config, items, results);
   await sendDiscordDigest(config, digest);
   return digest;
 }
@@ -208,27 +209,37 @@ function emptyGroups(): Record<Category, DigestItem[]> {
   return Object.fromEntries(categoryOrder().map((category) => [category, []])) as unknown as Record<Category, DigestItem[]>;
 }
 
-function buildDigest(config: AppConfig, items: DigestItem[], results: AccountProcessResult[]): DigestReport {
+async function buildDigest(config: AppConfig, items: DigestItem[], results: AccountProcessResult[]): Promise<DigestReport> {
   const grouped = groupItems(items);
+  for (const category of categoryOrder()) {
+    grouped[category].sort((a, b) => b.importance - a.importance);
+  }
+  const counts = groupCounts(grouped);
+  const total = totalCount(counts);
+  const leads = total > 0 ? await summarizeSections(config, grouped) : blankLeads();
   const metadata = categories();
   const sections = categoryOrder().map((category) => ({
     category,
     title: metadata[category].title,
-    items: grouped[category].sort((a, b) => b.importance - a.importance)
+    items: grouped[category],
+    lead: leads[category] || ''
   }));
 
-  const counts = groupCounts(grouped);
   const accounts = results.map(toAccountSummary);
 
   return {
     runIds: results.map((result) => result.runId),
     account: accounts.length > 0 ? accounts.map((item) => `${item.accountName} <${item.accountEmail}>`).join(', ') : 'processed mail',
     date: todayWindow(config).date,
-    total: totalCount(counts),
+    total,
     counts,
     accounts,
     sections
   };
+}
+
+function blankLeads(): Record<Category, string> {
+  return Object.fromEntries(categoryOrder().map((category) => [category, ''])) as Record<Category, string>;
 }
 
 function groupItems(items: DigestItem[]): Record<Category, DigestItem[]> {
