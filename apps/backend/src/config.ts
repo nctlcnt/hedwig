@@ -44,7 +44,7 @@ export function loadConfig(): AppConfig {
     discord: {
       botToken: required('DISCORD_BOT_TOKEN'),
       digestChannelId: required('DISCORD_DIGEST_CHANNEL_ID'),
-      realtimeChannelId: process.env.DISCORD_REALTIME_CHANNEL_ID || process.env.DISCORD_DIGEST_CHANNEL_ID || ''
+      realtimeChannelId: process.env.DISCORD_REALTIME_CHANNEL_ID || ''
     },
     digest: {
       timezone: process.env.DIGEST_TIMEZONE || 'Australia/Sydney',

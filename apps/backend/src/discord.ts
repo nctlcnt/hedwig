@@ -17,6 +17,10 @@ export async function sendDiscordDigest(config: AppConfig, digest: DigestReport)
 }
 
 export async function sendDiscordRealtime(config: AppConfig, item: DigestItem): Promise<void> {
+  if (!config.discord.realtimeChannelId) {
+    console.info(`Skipping realtime push for ${item.mailId}: DISCORD_REALTIME_CHANNEL_ID not set`);
+    return;
+  }
   await sendDiscordMessage(config, config.discord.realtimeChannelId, {
     content: null,
     embeds: [{

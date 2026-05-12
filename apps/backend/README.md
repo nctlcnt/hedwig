@@ -27,7 +27,7 @@ npm run digest:daemon
 npm run google:auth
 ```
 
-`digest:daemon` processes unread mail every `DIGEST_PROCESS_CRON` interval, defaulting to `*/5 * * * *`, and sends the daily digest at `DIGEST_CRON`. Action-classified messages are pushed immediately to `DISCORD_REALTIME_CHANNEL_ID` when set, otherwise the digest channel is used. All processed messages that are not starred are marked read and removed from Inbox.
+`digest:daemon` processes unread mail every `DIGEST_PROCESS_CRON` interval, defaulting to `*/5 * * * *`, and sends the daily digest at `DIGEST_CRON`. Action-classified messages are pushed immediately to `DISCORD_REALTIME_CHANNEL_ID`; if that variable is unset the push is skipped and the message only surfaces in the next digest (no fallback to the digest channel, to avoid duplicate posts). All processed messages that are not starred are marked read and removed from Inbox.
 
 The cron path (`digest:daemon` and `digest:once`) only looks at unread mail inside the `GMAIL_LOOKBACK_HOURS` window, so older unread backlog is intentionally ignored.
 
