@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
+import { buildGmailMessageUrl } from './gmail-url.js';
 import type { AppConfig, Category, Classification, DigestItem, EmailMessage, ProcessingAction } from './types.js';
 
 export type HedwigDb = DatabaseType;
@@ -114,9 +115,9 @@ export function listProcessedDigestItems(
       m.account_id as accountId,
       m.account as accountEmail,
       m.gmail_id as id,
+      m.thread_id as threadId,
       m.sender as sender,
       m.subject as subject,
-      m.gmail_url as gmailUrl,
       c.category as category,
       c.summary as summary,
       c.importance as importance,
@@ -142,9 +143,9 @@ export function listProcessedDigestItems(
     accountId: string;
     accountEmail: string;
     id: string;
+    threadId: string;
     sender: string;
     subject: string;
-    gmailUrl: string;
     category: Category;
     summary: string;
     importance: number;
@@ -166,7 +167,7 @@ export function listProcessedDigestItems(
     confidence: row.confidence,
     provider: row.provider,
     processedAs: row.processedAs,
-    gmailUrl: row.gmailUrl
+    gmailUrl: buildGmailMessageUrl(row.accountEmail, row.threadId)
   }));
 }
 

@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import type { gmail_v1 } from 'googleapis';
+import { buildGmailMessageUrl } from './gmail-url.js';
 import type { AppConfig, EmailMessage, GmailAccountConfig, GmailClient } from './types.js';
 
 const FOLLOWUP_LABEL = 'Hedwig/Followup';
@@ -129,7 +130,7 @@ function normalizeMessage(
     date,
     snippet: message.snippet || '',
     text: extractText(message.payload),
-    gmailUrl: `https://mail.google.com/mail/u/${encodeURIComponent(accountEmail)}/#inbox/${message.threadId}`
+    gmailUrl: buildGmailMessageUrl(accountEmail, requireMessageField(message.threadId, 'threadId'))
   };
 }
 
