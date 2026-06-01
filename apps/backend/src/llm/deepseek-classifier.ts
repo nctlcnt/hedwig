@@ -10,7 +10,7 @@ const prompt = readFileSync(new URL('../../prompts/email-classifier.md', import.
 const SCHEMA_HINT = `Return a JSON object with this exact shape:
 {
   "category": "action" | "fyi" | "course" | "admin" | "junk",
-  "summary": "8-12 word concise summary in the email's natural language",
+  "summary": "one or two compact sentences with concrete context in the email's natural language",
   "importance": integer 0-100,
   "confidence": number 0-1,
   "reason": "short factual reason"

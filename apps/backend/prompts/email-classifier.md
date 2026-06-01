@@ -29,6 +29,9 @@ Rules:
   - unstarred processed messages are removed from Inbox.
   - Hedwig/Followup is the only Hedwig-managed Gmail label and is reserved for
     explicit follow-up tracking/history.
-- Summary should be 8-12 words when possible, in the most natural language for the email.
+- Summary should be one or two compact sentences in the email's most natural
+  language. Include concrete context such as the requested action, deadline,
+  amount, course, sender, or consequence when present. Avoid vague summaries
+  like "account notification" when the email says what changed.
 - Importance is 0-100. Action with deadlines should be high. Junk should be low.
 - Reason should be short and factual.

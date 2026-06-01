@@ -181,7 +181,7 @@ export function normalizeClassification(
 
   const haystack = normalize(`${email.from} ${email.subject} ${email.snippet} ${email.text}`);
   const summary = typeof classification.summary === 'string' && classification.summary.trim()
-    ? classification.summary.trim().slice(0, 160)
+    ? classification.summary.trim().slice(0, 320)
     : summarize(email);
   const importance = typeof classification.importance === 'number' && Number.isFinite(classification.importance)
     ? clamp(Math.round(classification.importance), 0, 100)
@@ -211,11 +211,11 @@ export function categoryOrder(): Category[] {
 export function summarize(email: EmailMessage): string {
   const source = (email.snippet || email.subject || '').replace(/\s+/g, ' ').trim();
   if (!source) return '无摘要';
-  const words = source.split(/\s+/).slice(0, 12).join(' ');
   if (/[\u3400-\u9fff]/.test(source)) {
-    return Array.from(source).slice(0, 24).join('');
+    const chars = Array.from(source);
+    return chars.length > 80 ? `${chars.slice(0, 80).join('')}…` : chars.join('');
   }
-  return words;
+  return source.length > 220 ? `${source.slice(0, 218)}…` : source;
 }
 
 function clamp(value: number, min: number, max: number): number {

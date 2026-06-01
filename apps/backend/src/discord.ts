@@ -9,11 +9,11 @@ const SECTION_LABELS: Record<Category, string> = {
   admin: 'Admin 行政',
   junk: 'Junk 促销'
 };
-const SECTION_ITEM_LIMIT = 15;
+const SECTION_ITEM_LIMIT = 10;
 const DESCRIPTION_LIMIT = 4000;
 
 export async function sendDiscordDigest(config: AppConfig, digest: DigestReport): Promise<void> {
-  await sendDiscordMessage(config, config.discord.digestChannelId, buildMessage(digest));
+  await sendDiscordMessage(config, config.discord.digestChannelId, buildDiscordDigestMessage(digest));
 }
 
 export async function sendDiscordRealtime(config: AppConfig, item: DigestItem): Promise<void> {
@@ -58,7 +58,7 @@ async function sendDiscordMessage(config: AppConfig, channelId: string, body: un
   }
 }
 
-function buildMessage(digest: DigestReport) {
+export function buildDiscordDigestMessage(digest: DigestReport) {
   return {
     content: null,
     embeds: [reportEmbed(digest), ...errorEmbeds(digest)],
@@ -107,20 +107,29 @@ function sectionBlock(digest: DigestReport, category: Category): string {
 
 function formatLine(item: DigestItem): string {
   const sender = displaySender(item.from);
-  const summary = escapeMarkdown(briefSummary(item));
-  return `• ${sender} — ${summary} — [查看](${item.gmailUrl})`;
+  const subject = escapeMarkdown(briefSubject(item));
+  const summary = escapeMarkdown(digestSummary(item));
+  return `• **${sender}** · ${subject}\n  ${summary} · [查看](${item.gmailUrl})`;
 }
 
-function briefSummary(item: DigestItem): string {
+function briefSubject(item: DigestItem): string {
+  const raw = item.subject.replace(/\s+/g, ' ').trim();
+  if (!raw) return '(no subject)';
+  if (/[㐀-鿿]/.test(raw)) {
+    const chars = Array.from(raw);
+    return chars.length > 28 ? `${chars.slice(0, 28).join('')}…` : chars.join('');
+  }
+  return raw.length > 90 ? `${raw.slice(0, 88)}…` : raw;
+}
+
+function digestSummary(item: DigestItem): string {
   const raw = (item.summary || item.subject || '').replace(/\s+/g, ' ').trim();
   if (!raw || raw === '无摘要') return '无摘要';
   if (/[㐀-鿿]/.test(raw)) {
     const chars = Array.from(raw);
-    return chars.length > 12 ? `${chars.slice(0, 12).join('')}…` : chars.join('');
+    return chars.length > 90 ? `${chars.slice(0, 90).join('')}…` : chars.join('');
   }
-  const words = raw.split(/\s+/);
-  if (words.length > 8) return `${words.slice(0, 8).join(' ')}…`;
-  return raw.length > 60 ? `${raw.slice(0, 58)}…` : raw;
+  return raw.length > 240 ? `${raw.slice(0, 238)}…` : raw;
 }
 
 function realtimeSummary(item: DigestItem): string {
