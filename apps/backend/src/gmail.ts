@@ -171,6 +171,7 @@ function stripHtml(text: string): string {
   return text
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/\s(?:href|src)=["'](https?:\/\/[^"']+)["']/gi, ' $1 ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')

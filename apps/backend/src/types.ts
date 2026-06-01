@@ -14,6 +14,8 @@ export type AppConfig = {
     botToken: string;
     digestChannelId: string;
     realtimeChannelId: string;
+    publicKey: string;
+    interactionsPort: number;
   };
   digest: {
     timezone: string;
@@ -81,6 +83,24 @@ export type DigestItem = {
   provider: string;
   processedAs: ProcessingAction;
   gmailUrl: string;
+};
+
+export type EmailPreviewLink = {
+  url: string;
+};
+
+export type CachedEmailPreview = {
+  accountId: string;
+  accountName: string;
+  mailId: string;
+  id: string;
+  from: string;
+  subject: string;
+  summary: string;
+  bodyText: string;
+  links: EmailPreviewLink[];
+  gmailUrl: string;
+  expiresAt: string;
 };
 
 export type DigestSection = {

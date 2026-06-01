@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { loadConfig } from './config.js';
 import { processUnreadMail, runDailyDigest, sendTodayDigest } from './digest.js';
 import { openDatabase } from './db.js';
+import { startDiscordInteractionServer } from './discord-interactions.js';
 import { createGmailMailGateway } from './gateway/gmail-mail-gateway.js';
 
 const mode = process.argv[2] || 'once';
@@ -22,6 +23,8 @@ if (mode === 'once') {
     process.exitCode = 1;
   });
 } else if (mode === 'daemon') {
+  startDiscordInteractionServer(config, db);
+
   console.log(`Scheduling unread mail processing with "${config.digest.processCron}" in ${config.digest.timezone}`);
   cron.schedule(
     config.digest.processCron,

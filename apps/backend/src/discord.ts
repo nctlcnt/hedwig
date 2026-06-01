@@ -2,6 +2,7 @@ import type { AppConfig, Category, DigestItem, DigestReport } from './types.js';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const REPORT_CATEGORIES: Category[] = ['action', 'fyi', 'course', 'admin'];
+const PREVIEW_BUTTON_PREFIX = 'email_preview:';
 const SECTION_LABELS: Record<Category, string> = {
   action: 'Action 待处理',
   fyi: 'FYI 通知',
@@ -11,6 +12,8 @@ const SECTION_LABELS: Record<Category, string> = {
 };
 const SECTION_ITEM_LIMIT = 10;
 const DESCRIPTION_LIMIT = 4000;
+const MAX_ACTION_ROWS = 5;
+const MAX_ACTION_BUTTONS = 25;
 
 export async function sendDiscordDigest(config: AppConfig, digest: DigestReport): Promise<void> {
   await sendDiscordMessage(config, config.discord.digestChannelId, buildDiscordDigestMessage(digest));
@@ -21,7 +24,7 @@ export async function sendDiscordRealtime(config: AppConfig, item: DigestItem): 
     console.info(`Skipping realtime push for ${item.mailId}: DISCORD_REALTIME_CHANNEL_ID not set`);
     return;
   }
-  await sendDiscordMessage(config, config.discord.realtimeChannelId, {
+  await sendDiscordMessage(config, config.discord.realtimeChannelId, withActionRows({
     content: null,
     embeds: [{
       title: '需要及时查看的邮件',
@@ -35,7 +38,7 @@ export async function sendDiscordRealtime(config: AppConfig, item: DigestItem): 
       timestamp: new Date().toISOString()
     }],
     allowed_mentions: { parse: [] }
-  });
+  }, [item]));
 }
 
 async function sendDiscordMessage(config: AppConfig, channelId: string, body: unknown): Promise<void> {
@@ -59,11 +62,12 @@ async function sendDiscordMessage(config: AppConfig, channelId: string, body: un
 }
 
 export function buildDiscordDigestMessage(digest: DigestReport) {
-  return {
+  const previewItems = visibleDigestItems(digest);
+  return withActionRows({
     content: null,
     embeds: [reportEmbed(digest), ...errorEmbeds(digest)],
     allowed_mentions: { parse: [] }
-  };
+  }, previewItems);
 }
 
 function reportEmbed(digest: DigestReport) {
@@ -71,7 +75,7 @@ function reportEmbed(digest: DigestReport) {
     title: `[Daily Digest] ${digest.date} — 共 ${digest.total} 封`,
     description: limitDescription(reportBody(digest)),
     color: pickColor(digest),
-    footer: { text: digest.account },
+    footer: { text: 'Hedwig email digest' },
     timestamp: new Date().toISOString()
   };
 }
@@ -80,8 +84,9 @@ function reportBody(digest: DigestReport): string {
   if (digest.total === 0) {
     return '过去一个周期没有需要汇总的新邮件。';
   }
+  const itemNumbers = visibleDigestItemNumbers(digest);
   const sections = REPORT_CATEGORIES
-    .map((category) => sectionBlock(digest, category))
+    .map((category) => sectionBlock(digest, category, itemNumbers))
     .filter(Boolean);
   return [summaryLine(digest), '', sections.join('\n\n')].join('\n');
 }
@@ -91,25 +96,26 @@ function summaryLine(digest: DigestReport): string {
   return `今天 **${digest.total}** 封 · Action ${c.action} · FYI ${c.fyi} · Course ${c.course} · Admin ${c.admin} · Junk ${c.junk}`;
 }
 
-function sectionBlock(digest: DigestReport, category: Category): string {
+function sectionBlock(digest: DigestReport, category: Category, itemNumbers: Map<string, number>): string {
   const section = digest.sections.find((entry) => entry.category === category);
   const items = section?.items || [];
   if (items.length === 0) return '';
   const header = `**${SECTION_LABELS[category]}（${items.length}）**`;
   const lead = section?.lead?.trim();
   const leadLine = lead ? [`_${escapeMarkdown(lead)}_`] : [];
-  const lines = items.slice(0, SECTION_ITEM_LIMIT).map(formatLine);
+  const lines = items.slice(0, SECTION_ITEM_LIMIT).map((item) => formatLine(item, itemNumbers.get(item.mailId)));
   const overflow = items.length > SECTION_ITEM_LIMIT
     ? [`• 另有 ${items.length - SECTION_ITEM_LIMIT} 封同类未列出`]
     : [];
   return [header, ...leadLine, ...lines, ...overflow].join('\n');
 }
 
-function formatLine(item: DigestItem): string {
+function formatLine(item: DigestItem, displayNumber: number | undefined): string {
   const sender = displaySender(item.from);
   const subject = escapeMarkdown(briefSubject(item));
   const summary = escapeMarkdown(digestSummary(item));
-  return `• **${sender}** · ${subject}\n  ${summary} · [查看](${item.gmailUrl})`;
+  const prefix = displayNumber ? `${displayNumber}. ` : '';
+  return `• **${prefix}${sender}** · ${subject}\n  ${summary} · [打开 Gmail](${item.gmailUrl})`;
 }
 
 function briefSubject(item: DigestItem): string {
@@ -157,6 +163,48 @@ function errorEmbeds(digest: DigestReport) {
     }).join('\n'),
     color: 0xf59e0b
   }];
+}
+
+function visibleDigestItems(digest: DigestReport): DigestItem[] {
+  const items: DigestItem[] = [];
+  for (const category of REPORT_CATEGORIES) {
+    const section = digest.sections.find((entry) => entry.category === category);
+    for (const item of section?.items.slice(0, SECTION_ITEM_LIMIT) || []) {
+      items.push(item);
+      if (items.length >= MAX_ACTION_BUTTONS) return items;
+    }
+  }
+  return items;
+}
+
+function visibleDigestItemNumbers(digest: DigestReport): Map<string, number> {
+  return new Map(visibleDigestItems(digest).map((item, index) => [item.mailId, index + 1]));
+}
+
+function actionRows(items: DigestItem[]) {
+  const buttons = items.slice(0, MAX_ACTION_BUTTONS).map((item, index) => ({
+    type: 2,
+    style: 2,
+    label: `查看内容 ${index + 1}`,
+    custom_id: `${PREVIEW_BUTTON_PREFIX}${item.mailId}`
+  }));
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += MAX_ACTION_ROWS) {
+    rows.push({
+      type: 1,
+      components: buttons.slice(index, index + MAX_ACTION_ROWS)
+    });
+  }
+  return rows;
+}
+
+function withActionRows<T extends Record<string, unknown>>(body: T, items: DigestItem[]): T & { components?: unknown[] } {
+  const rows = actionRows(items);
+  if (rows.length === 0) return body;
+  return {
+    ...body,
+    components: rows
+  };
 }
 
 function sectionColor(category: Category): number {

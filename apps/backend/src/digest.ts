@@ -6,6 +6,7 @@ import {
   failDigestRun,
   finishDigestRun,
   listProcessedDigestItems,
+  saveEmailBodyCache,
   saveClassification,
   saveMessage,
   updateDigestRunAccount
@@ -142,6 +143,7 @@ async function runAccountClassificationPass(
       }
 
       saveMessage(db, account, email);
+      saveEmailBodyCache(db, email);
       saveClassification(db, runId, email, classification, processedAs);
       await mailGateway.markMessagesRead(accountConfig, [email.id]);
       counts[classification.category] += 1;

@@ -55,6 +55,15 @@ DEEPSEEK_MODEL=deepseek-v4-pro
 Use `CLASSIFIER_PROVIDER=rule` to run without DeepSeek.
 DeepSeek is called via the OpenAI-compatible endpoint at `https://api.deepseek.com`.
 
+Discord content preview buttons are optional. To enable them, expose the daemon's interaction endpoint to Discord and set:
+
+```text
+DISCORD_PUBLIC_KEY=
+DISCORD_INTERACTIONS_PORT=3001
+```
+
+When enabled, digest/realtime messages include `查看内容` buttons. Clicking one returns an ephemeral preview from Hedwig's local SQLite body cache: classifier summary, rough body text, important links, and a fallback Gmail link. Cached bodies are retained for 7 days and expired rows are deleted automatically.
+
 Required Gmail OAuth scope:
 
 ```text

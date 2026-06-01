@@ -3,7 +3,15 @@ import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import { buildGmailMessageUrl } from './gmail-url.js';
-import type { AppConfig, Category, Classification, DigestItem, EmailMessage, ProcessingAction } from './types.js';
+import type {
+  AppConfig,
+  CachedEmailPreview,
+  Category,
+  Classification,
+  DigestItem,
+  EmailMessage,
+  ProcessingAction
+} from './types.js';
 
 export type HedwigDb = DatabaseType;
 
@@ -74,6 +82,29 @@ export function saveMessage(db: HedwigDb, account: string, email: EmailMessage):
     email.snippet,
     email.gmailUrl,
     new Date().toISOString()
+  );
+}
+
+export function saveEmailBodyCache(db: HedwigDb, email: EmailMessage): void {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  db.prepare(`
+    insert into email_body_cache (
+      account_id, gmail_id, body_text, links_json, created_at, expires_at
+    )
+    values (?, ?, ?, ?, ?, ?)
+    on conflict(account_id, gmail_id) do update set
+      body_text = excluded.body_text,
+      links_json = excluded.links_json,
+      created_at = excluded.created_at,
+      expires_at = excluded.expires_at
+  `).run(
+    email.accountId,
+    email.id,
+    email.text,
+    JSON.stringify(extractLinks(email.text).map((url) => ({ url }))),
+    now.toISOString(),
+    expiresAt.toISOString()
   );
 }
 
@@ -171,6 +202,80 @@ export function listProcessedDigestItems(
   }));
 }
 
+export function getCachedEmailPreview(db: HedwigDb, mailId: string): CachedEmailPreview | null {
+  const parsed = parseMailId(mailId);
+  if (!parsed) return null;
+  deleteExpiredEmailBodyCache(db);
+
+  const row = db.prepare(`
+    select
+      m.account_id as accountId,
+      m.account as accountName,
+      m.gmail_id as id,
+      m.thread_id as threadId,
+      m.sender as sender,
+      m.subject as subject,
+      c.summary as summary,
+      b.body_text as bodyText,
+      b.links_json as linksJson,
+      b.expires_at as expiresAt
+    from messages m
+    join email_body_cache b
+      on b.account_id = m.account_id
+      and b.gmail_id = m.gmail_id
+    left join (
+      select account_id, gmail_id, max(id) as id
+      from message_classifications
+      group by account_id, gmail_id
+    ) latest
+      on latest.account_id = m.account_id
+      and latest.gmail_id = m.gmail_id
+    left join message_classifications c
+      on c.account_id = latest.account_id
+      and c.gmail_id = latest.gmail_id
+      and c.id = latest.id
+    where m.account_id = ?
+      and m.gmail_id = ?
+      and b.expires_at > ?
+    limit 1
+  `).get(parsed.accountId, parsed.gmailId, new Date().toISOString()) as {
+    accountId: string;
+    accountName: string;
+    id: string;
+    threadId: string;
+    sender: string;
+    subject: string;
+    summary: string | null;
+    bodyText: string;
+    linksJson: string;
+    expiresAt: string;
+  } | undefined;
+
+  if (!row) return null;
+
+  return {
+    accountId: row.accountId,
+    accountName: row.accountName,
+    mailId,
+    id: row.id,
+    from: row.sender,
+    subject: row.subject,
+    summary: row.summary || '',
+    bodyText: row.bodyText,
+    links: parseLinks(row.linksJson),
+    gmailUrl: buildGmailMessageUrl(row.accountName, row.threadId),
+    expiresAt: row.expiresAt
+  };
+}
+
+export function deleteExpiredEmailBodyCache(db: HedwigDb): number {
+  const result = db.prepare(`
+    delete from email_body_cache
+    where expires_at <= ?
+  `).run(new Date().toISOString());
+  return result.changes;
+}
+
 function migrate(db: HedwigDb): void {
   const existingColumns = tableColumns(db, 'messages');
   if (existingColumns.includes('gmail_id') && !existingColumns.includes('account_id')) {
@@ -219,11 +324,25 @@ function migrate(db: HedwigDb): void {
       created_at text not null
     );
 
+    create table if not exists email_body_cache (
+      account_id text not null,
+      gmail_id text not null,
+      body_text text not null,
+      links_json text not null default '[]',
+      created_at text not null,
+      expires_at text not null,
+      primary key (account_id, gmail_id),
+      foreign key (account_id, gmail_id) references messages(account_id, gmail_id) on delete cascade
+    );
+
     create index if not exists idx_message_classifications_run_id
       on message_classifications(run_id);
 
     create index if not exists idx_message_classifications_gmail_id
       on message_classifications(account_id, gmail_id);
+
+    create index if not exists idx_email_body_cache_expires_at
+      on email_body_cache(expires_at);
   `);
 
   addColumnIfMissing(db, 'digest_runs', 'account_id', "text not null default 'primary'");
@@ -231,6 +350,48 @@ function migrate(db: HedwigDb): void {
   addColumnIfMissing(db, 'message_classifications', 'processed_as', "text not null default 'digest_only'");
   addColumnIfMissing(db, 'message_classifications', 'processed_at', 'text');
   backfillProcessedAt(db);
+  deleteExpiredEmailBodyCache(db);
+}
+
+function parseMailId(mailId: string): { accountId: string; gmailId: string } | null {
+  const separator = mailId.indexOf(':');
+  if (separator <= 0 || separator === mailId.length - 1) return null;
+  return {
+    accountId: mailId.slice(0, separator),
+    gmailId: mailId.slice(separator + 1)
+  };
+}
+
+function extractLinks(text: string): string[] {
+  const matches = text.match(/https?:\/\/[^\s<>"')\]]+/g) || [];
+  const seen = new Set<string>();
+  const links: string[] = [];
+  for (const raw of matches) {
+    const url = raw.replace(/[.,;:!?]+$/g, '');
+    if (seen.has(url)) continue;
+    seen.add(url);
+    links.push(url);
+    if (links.length >= 10) break;
+  }
+  return links;
+}
+
+function parseLinks(raw: string): Array<{ url: string }> {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => {
+        if (typeof item === 'string') return { url: item };
+        if (item && typeof item === 'object' && 'url' in item && typeof item.url === 'string') {
+          return { url: item.url };
+        }
+        return null;
+      })
+      .filter((item): item is { url: string } => Boolean(item));
+  } catch {
+    return [];
+  }
 }
 
 function migrateMessagesToAccountScopedKeys(db: HedwigDb): void {
