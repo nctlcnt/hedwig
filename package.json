@@ -9,11 +9,13 @@
     "digest:daemon": "tsx apps/backend/src/index.ts daemon",
     "probe:deepseek": "tsx apps/backend/scripts/deepseek-probe.ts",
     "probe:unread": "tsx apps/backend/scripts/unread-probe.ts",
+    "dry-run:preview": "tsx apps/backend/scripts/preview-dry-run.ts",
     "backfill:unread": "tsx apps/backend/scripts/backfill-unread.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",
+    "discord.js": "^14.26.4",
     "dotenv": "^16.4.5",
     "googleapis": "^171.4.0",
     "luxon": "^3.5.0",

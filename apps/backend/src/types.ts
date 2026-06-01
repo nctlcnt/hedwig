@@ -14,8 +14,6 @@ export type AppConfig = {
     botToken: string;
     digestChannelId: string;
     realtimeChannelId: string;
-    publicKey: string;
-    interactionsPort: number;
   };
   digest: {
     timezone: string;
