@@ -55,7 +55,7 @@ DEEPSEEK_MODEL=deepseek-v4-pro
 Use `CLASSIFIER_PROVIDER=rule` to run without DeepSeek.
 DeepSeek is called via the OpenAI-compatible endpoint at `https://api.deepseek.com`.
 
-The daily digest posts a glanceable summary message to `DISCORD_DIGEST_CHANNEL_ID` (counts plus a one-line lead per section), then opens a thread off that message and posts the per-section detail inside it. Splitting the detail across thread messages — chunked at 25 buttons / 4000 characters each — lets a busy day list every email without the single-message truncation or the 25-button ceiling.
+The daily digest posts a glanceable summary message to `DISCORD_DIGEST_CHANNEL_ID` (counts plus a one-line lead per section), then opens a thread off that message and posts the per-section detail inside it. Splitting the detail across thread messages — chunked at 25 buttons / ~3800 characters each (kept under Discord’s embed description limit) — lets a busy day list every email without the single-message truncation or the 25-button ceiling.
 
 In daemon mode, Hedwig also logs in to Discord Gateway with `DISCORD_BOT_TOKEN` to handle digest/realtime buttons. Digest entries include `查看内容` buttons; clicking one returns an ephemeral preview from Hedwig's local SQLite body cache: classifier summary, rough body text, important links, and a fallback Gmail link. Cached bodies are retained for 7 days and expired rows are deleted automatically.
 
