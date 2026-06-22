@@ -29,9 +29,11 @@ function boolean(name: string, fallback: boolean): boolean {
 }
 
 export function loadConfig(): AppConfig {
-  const rawProvider = process.env.CLASSIFIER_PROVIDER || (process.env.DEEPSEEK_API_KEY ? 'deepseek' : 'rule');
-  if (rawProvider !== 'rule' && rawProvider !== 'deepseek') {
-    throw new Error(`CLASSIFIER_PROVIDER must be "rule" or "deepseek", got: ${rawProvider}`);
+  const rawProvider = process.env.CLASSIFIER_PROVIDER
+    || (process.env.CLASSIFIER_API_KEY || process.env.DEEPSEEK_API_KEY ? 'openai-compatible' : 'rule');
+  const provider = rawProvider === 'deepseek' ? 'openai-compatible' : rawProvider;
+  if (provider !== 'rule' && provider !== 'openai-compatible') {
+    throw new Error(`CLASSIFIER_PROVIDER must be "rule", "openai-compatible", or legacy "deepseek", got: ${rawProvider}`);
   }
 
   return {
@@ -55,10 +57,12 @@ export function loadConfig(): AppConfig {
       unreadOnly: boolean('GMAIL_UNREAD_ONLY', true)
     },
     classifier: {
-      provider: rawProvider,
-      deepseek: {
-        apiKey: process.env.DEEPSEEK_API_KEY || '',
-        model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro'
+      provider,
+      llm: {
+        apiKey: process.env.CLASSIFIER_API_KEY || process.env.DEEPSEEK_API_KEY || '',
+        baseUrl: process.env.CLASSIFIER_API_BASE_URL || 'https://api.deepseek.com',
+        model: process.env.CLASSIFIER_MODEL || process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro',
+        providerName: process.env.CLASSIFIER_PROVIDER_NAME || (rawProvider === 'deepseek' ? 'deepseek' : 'openai-compatible')
       }
     },
     database: {

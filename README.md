@@ -44,16 +44,28 @@ cp .env.example .env
 npm install
 ```
 
-Fill `.env` with Gmail OAuth client refresh token values, the Hedwig Discord bot token/channel, and optionally DeepSeek:
+Fill `.env` with Gmail OAuth client refresh token values, the Hedwig Discord bot token/channel, and optionally an OpenAI-compatible classifier API:
 
 ```text
-CLASSIFIER_PROVIDER=deepseek
-DEEPSEEK_API_KEY=
-DEEPSEEK_MODEL=deepseek-v4-pro
+CLASSIFIER_PROVIDER=openai-compatible
+CLASSIFIER_API_BASE_URL=https://api.deepseek.com
+CLASSIFIER_API_KEY=
+CLASSIFIER_MODEL=deepseek-v4-pro
+CLASSIFIER_PROVIDER_NAME=deepseek
 ```
 
-Use `CLASSIFIER_PROVIDER=rule` to run without DeepSeek.
-DeepSeek is called via the OpenAI-compatible endpoint at `https://api.deepseek.com`.
+Use `CLASSIFIER_PROVIDER=rule` to run without an LLM. Legacy `CLASSIFIER_PROVIDER=deepseek`,
+`DEEPSEEK_API_KEY`, and `DEEPSEEK_MODEL` are still accepted.
+
+For GLM, set:
+
+```text
+CLASSIFIER_PROVIDER=openai-compatible
+CLASSIFIER_API_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+CLASSIFIER_API_KEY=...
+CLASSIFIER_MODEL=glm-4.7
+CLASSIFIER_PROVIDER_NAME=glm
+```
 
 The daily digest posts a glanceable summary message to `DISCORD_DIGEST_CHANNEL_ID` (counts plus a one-line lead per section), then opens a thread off that message and posts the per-section detail inside it. Splitting the detail across thread messages — chunked at 25 buttons / 4000 characters each — lets a busy day list every email without the single-message truncation or the 25-button ceiling.
 
@@ -151,12 +163,12 @@ npm run backfill:unread        # 30 most-recent unread per account
 npm run backfill:unread 1      # smoke test: 1 message per account
 ```
 
-`backfill:unread` ignores `GMAIL_LOOKBACK_HOURS` and reuses the same pipeline as the daemon (classify, Discord push, SQLite, mark read, Inbox cleanup). Run `backfill:unread 1` after changing the classifier provider or model to verify the DeepSeek end-to-end path against real Gmail with minimal side effects.
+`backfill:unread` ignores `GMAIL_LOOKBACK_HOURS` and reuses the same pipeline as the daemon (classify, Discord push, SQLite, mark read, Inbox cleanup). Run `backfill:unread 1` after changing the classifier provider, base URL, or model to verify the LLM end-to-end path against real Gmail with minimal side effects.
 
 ### probe scripts
 
 ```bash
-npm run probe:deepseek   # synthetic email through the DeepSeek classifier
+npm run probe:deepseek   # synthetic email through the configured LLM classifier
 npm run probe:unread     # per-account unread counts in/out of the lookback window
 ```
 

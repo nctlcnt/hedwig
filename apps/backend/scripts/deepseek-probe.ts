@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { loadConfig } from '../src/config.js';
-import { createDeepseekClassifier } from '../src/llm/deepseek-classifier.js';
+import { createOpenAICompatibleClassifier } from '../src/llm/openai-compatible-classifier.js';
 import type { EmailMessage } from '../src/types.js';
 
 const sample: EmailMessage = {
@@ -24,12 +24,13 @@ const sample: EmailMessage = {
 
 async function main() {
   const config = loadConfig();
-  if (config.classifier.provider !== 'deepseek') {
-    throw new Error(`Probe expects CLASSIFIER_PROVIDER=deepseek, got: ${config.classifier.provider}`);
+  if (config.classifier.provider !== 'openai-compatible') {
+    throw new Error(`Probe expects CLASSIFIER_PROVIDER=openai-compatible, got: ${config.classifier.provider}`);
   }
-  console.log(`Calling DeepSeek model: ${config.classifier.deepseek.model}`);
+  console.log(`Calling ${config.classifier.llm.providerName} model: ${config.classifier.llm.model}`);
+  console.log(`Base URL: ${config.classifier.llm.baseUrl}`);
 
-  const classifier = createDeepseekClassifier(config);
+  const classifier = createOpenAICompatibleClassifier(config);
   const start = Date.now();
   const result = await classifier.classify(sample);
   const elapsed = Date.now() - start;
@@ -37,11 +38,11 @@ async function main() {
   console.log(`Elapsed: ${elapsed}ms`);
   console.log(JSON.stringify(result, null, 2));
 
-  if (result.provider !== 'deepseek') {
-    console.error(`\nFAILED: provider=${result.provider} (expected deepseek). Likely fell back to rule.`);
+  if (result.provider !== config.classifier.llm.providerName) {
+    console.error(`\nFAILED: provider=${result.provider} (expected ${config.classifier.llm.providerName}). Likely fell back to rule.`);
     process.exit(1);
   }
-  console.log('\nOK: DeepSeek returned a usable classification.');
+  console.log(`\nOK: ${config.classifier.llm.providerName} returned a usable classification.`);
 }
 
 main().catch((error) => {

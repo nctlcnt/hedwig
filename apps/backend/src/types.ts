@@ -24,10 +24,12 @@ export type AppConfig = {
     unreadOnly: boolean;
   };
   classifier: {
-    provider: 'rule' | 'deepseek';
-    deepseek: {
+    provider: 'rule' | 'openai-compatible';
+    llm: {
       apiKey: string;
+      baseUrl: string;
       model: string;
+      providerName: string;
     };
   };
   database: {

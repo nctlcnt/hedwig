@@ -21,7 +21,7 @@ export async function summarizeSections(
   grouped: Record<Category, DigestItem[]>
 ): Promise<Record<Category, string>> {
   const empty = blankLeads();
-  if (config.classifier.provider !== 'deepseek' || !config.classifier.deepseek.apiKey) {
+  if (config.classifier.provider !== 'openai-compatible' || !config.classifier.llm.apiKey) {
     return empty;
   }
   const userContent = buildUserContent(grouped);
@@ -31,11 +31,11 @@ export async function summarizeSections(
 
   try {
     const client = new OpenAI({
-      baseURL: 'https://api.deepseek.com',
-      apiKey: config.classifier.deepseek.apiKey
+      baseURL: config.classifier.llm.baseUrl,
+      apiKey: config.classifier.llm.apiKey
     });
     const completion = (await client.chat.completions.create({
-      model: config.classifier.deepseek.model,
+      model: config.classifier.llm.model,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userContent }
