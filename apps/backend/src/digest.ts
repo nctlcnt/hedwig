@@ -14,7 +14,8 @@ import {
   setSyncCursor,
   updateDigestRunAccount
 } from './db.js';
-import { sendDiscordClassifierAlert, sendDiscordDigest, sendDiscordRealtime } from './discord.js';
+import { reportProblem } from './alerts.js';
+import { buildClassifierFailureAlert, sendDiscordDigest, sendDiscordRealtime } from './discord.js';
 import { summarizeSections } from './llm/section-narrator.js';
 import type {
   AppConfig,
@@ -203,7 +204,7 @@ async function runAccountClassificationPass(
       counts[classification.category] += 1;
     }
 
-    await notifyClassifierFailures(config, account, classifierFailures);
+    await notifyClassifierFailures(config, db, account, classifierFailures);
 
     const total = totalCount(counts);
     finishDigestRun(db, runId, total);
@@ -217,6 +218,11 @@ async function runAccountClassificationPass(
     };
   } catch (error) {
     failDigestRun(db, runId, error);
+    await reportProblem(config, db, {
+      signature: `account-failed:${accountConfig.id}|${errorMessage(error).slice(0, 120)}`,
+      title: `账号处理失败：${accountConfig.displayName}`,
+      detail: `账号 **${accountConfig.displayName}** (${account}) 本轮处理失败：\n${errorMessage(error)}`
+    });
     return {
       runId,
       accountId: accountConfig.id,
@@ -231,16 +237,14 @@ async function runAccountClassificationPass(
 
 async function notifyClassifierFailures(
   config: AppConfig,
+  db: HedwigDb,
   account: string,
   failures: ClassifierFailure[]
 ): Promise<void> {
   if (failures.length === 0) return;
-  try {
-    await sendDiscordClassifierAlert(config, account, failures);
-  } catch (error) {
-    // An alert failure must not fail the whole run; the mail is already saved.
-    console.error('Failed to post classifier failure alert', error);
-  }
+  // reportProblem is itself best-effort and never throws, so a failed alert
+  // cannot fail the run; the mail is already saved.
+  await reportProblem(config, db, buildClassifierFailureAlert(account, failures));
 }
 
 function digestItem(

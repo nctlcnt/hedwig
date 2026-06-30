@@ -14,6 +14,10 @@ export type AppConfig = {
     botToken: string;
     digestChannelId: string;
     realtimeChannelId: string;
+    // Optional operational-error channel. Alerts here are deduped: the same
+    // problem signature is silenced for debugCooldownMs after it fires.
+    debugChannelId: string;
+    debugCooldownMs: number;
   };
   digest: {
     timezone: string;

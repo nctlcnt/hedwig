@@ -137,6 +137,27 @@ export function saveClassification(
   );
 }
 
+// Dedup gate for operational alerts. Returns true (and claims the slot by
+// stamping now) only if this signature has not fired within cooldownMs;
+// otherwise returns false and leaves the existing timestamp untouched, so the
+// cooldown counts from the last alert actually sent rather than each suppressed
+// attempt.
+export function shouldSendAlert(db: HedwigDb, signature: string, cooldownMs: number, now: Date = new Date()): boolean {
+  const key = signature.slice(0, 300);
+  const row = db.prepare(`
+    select last_sent_at as lastSentAt from alert_log where signature = ?
+  `).get(key) as { lastSentAt: string } | undefined;
+  if (row && now.getTime() - new Date(row.lastSentAt).getTime() < cooldownMs) {
+    return false;
+  }
+  db.prepare(`
+    insert into alert_log (signature, last_sent_at)
+    values (?, ?)
+    on conflict(signature) do update set last_sent_at = excluded.last_sent_at
+  `).run(key, now.toISOString());
+  return true;
+}
+
 // The per-account incremental-sync cursor (a Gmail historyId). This is how
 // Hedwig discovers new inbox mail without depending on Gmail's read/star/label
 // state. Null until the first run bootstraps it.
@@ -485,6 +506,11 @@ function migrate(db: HedwigDb): void {
       account_id text not null primary key,
       history_id text not null,
       updated_at text not null
+    );
+
+    create table if not exists alert_log (
+      signature text not null primary key,
+      last_sent_at text not null
     );
 
     create index if not exists idx_message_classifications_run_id

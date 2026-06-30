@@ -10,6 +10,7 @@ import {
   saveEmailBodyCache,
   saveMessage,
   setSyncCursor,
+  shouldSendAlert,
   createDigestRun
 } from './db.js';
 import { ttlCutoffs } from './cleanup.js';
@@ -25,7 +26,9 @@ const config: AppConfig = {
   discord: {
     botToken: '',
     digestChannelId: '',
-    realtimeChannelId: ''
+    realtimeChannelId: '',
+    debugChannelId: '',
+    debugCooldownMs: 60 * 60 * 1000
   },
   digest: {
     timezone: 'UTC',
@@ -176,6 +179,15 @@ assert.equal(getSyncCursor(cleanupDb, 'primary'), '12345');
 setSyncCursor(cleanupDb, 'primary', '23456');
 assert.equal(getSyncCursor(cleanupDb, 'primary'), '23456');
 assert.equal(getSyncCursor(cleanupDb, 'other'), null);
+
+// Alert dedup gate: first fire sends, repeats within cooldown are suppressed,
+// a different signature still fires, and the cooldown counts from the last sent.
+const hour = 60 * 60 * 1000;
+const t0 = new Date('2026-01-01T00:00:00Z');
+assert.equal(shouldSendAlert(cleanupDb, 'sig-a', hour, t0), true);
+assert.equal(shouldSendAlert(cleanupDb, 'sig-a', hour, new Date(t0.getTime() + 30 * 60 * 1000)), false);
+assert.equal(shouldSendAlert(cleanupDb, 'sig-b', hour, new Date(t0.getTime() + 30 * 60 * 1000)), true);
+assert.equal(shouldSendAlert(cleanupDb, 'sig-a', hour, new Date(t0.getTime() + 61 * 60 * 1000)), true);
 
 const cutoffs = ttlCutoffs(config.cleanup.ttlDays, new Date());
 const candidates = listCleanupCandidates(cleanupDb, 'primary', cutoffs, 200);

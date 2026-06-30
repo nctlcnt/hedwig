@@ -70,18 +70,31 @@ export async function sendDiscordRealtime(config: AppConfig, item: DigestItem): 
 
 const MAX_ALERT_ITEMS = 10;
 
-export async function sendDiscordClassifierAlert(
-  config: AppConfig,
+// Low-level poster for the operational/debug channel. Throttling is the
+// caller's responsibility (see reportProblem in alerts.ts); this just renders
+// the embed and no-ops when no debug channel is configured.
+export async function sendDiscordDebug(config: AppConfig, title: string, detail: string): Promise<void> {
+  const channelId = config.discord.debugChannelId;
+  if (!channelId) return;
+  await postMessage(config, channelId, {
+    content: null,
+    embeds: [{
+      title: title.slice(0, 256),
+      description: limitDescription(detail),
+      color: 0xb91c1c,
+      timestamp: new Date().toISOString()
+    }],
+    allowed_mentions: { parse: [] }
+  });
+}
+
+// Builds (but does not post) the classifier-fallback alert. The signature is
+// the distinct failure reasons, so a persistent outage dedupes run-to-run while
+// a genuinely new failure mode alerts again.
+export function buildClassifierFailureAlert(
   account: string,
   failures: ClassifierFailure[]
-): Promise<void> {
-  if (failures.length === 0) return;
-  const channelId = config.discord.realtimeChannelId || config.discord.digestChannelId;
-  if (!channelId) {
-    console.info('Skipping classifier failure alert: no Discord channel configured');
-    return;
-  }
-
+): { signature: string; title: string; detail: string } {
   const shown = failures.slice(0, MAX_ALERT_ITEMS);
   const lines = shown.map((failure) => (
     `• **${displaySender(failure.from)}** · ${escapeMarkdown(alertSubject(failure.subject))}\n  [打开 Gmail](${failure.gmailUrl})`
@@ -92,22 +105,17 @@ export async function sendDiscordClassifierAlert(
   const reasons = [...new Set(failures.map((failure) => failure.reason).filter(Boolean))].slice(0, 3);
   const reasonLine = reasons.length > 0 ? ['', `原因：${escapeMarkdown(reasons.join(' / ')).slice(0, 400)}`] : [];
 
-  await postMessage(config, channelId, {
-    content: null,
-    embeds: [{
-      title: `⚠️ ${failures.length} 封邮件 AI 分类失败（已用规则兜底）`,
-      description: limitDescription([
-        `账号 **${escapeMarkdown(account)}**：以下邮件的 AI 分类失败，已退回规则分类，可能不准确，请手动确认是否需要处理。`,
-        '',
-        ...lines,
-        ...moreLine,
-        ...reasonLine
-      ].join('\n')),
-      color: 0xf59e0b,
-      timestamp: new Date().toISOString()
-    }],
-    allowed_mentions: { parse: [] }
-  });
+  return {
+    signature: `classifier-fallback|${reasons.join(' / ')}`,
+    title: `⚠️ ${failures.length} 封邮件 AI 分类失败（已用规则兜底）`,
+    detail: [
+      `账号 **${escapeMarkdown(account)}**：以下邮件的 AI 分类失败，已退回规则分类，可能不准确，请手动确认是否需要处理。`,
+      '',
+      ...lines,
+      ...moreLine,
+      ...reasonLine
+    ].join('\n')
+  };
 }
 
 function alertSubject(subject: string): string {

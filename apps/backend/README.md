@@ -28,7 +28,9 @@ npm run google:auth
 
 `digest:daemon` processes unread mail every `DIGEST_PROCESS_CRON` interval, defaulting to `*/5 * * * *`, and sends the daily digest at `DIGEST_CRON`. Action-classified messages are pushed immediately to `DISCORD_REALTIME_CHANNEL_ID`; if that variable is unset the push is skipped and the message only surfaces in the next digest (no fallback to the digest channel, to avoid duplicate posts). Processed mail is left unread and in the Inbox (dedup is tracked in SQLite); only junk/one-time-code mail is removed from the Inbox, and starred mail always stays.
 
-The cron path (`digest:daemon` and `digest:once`) only looks at unread mail inside the `GMAIL_LOOKBACK_HOURS` window, so older unread backlog is intentionally ignored.
+Operational problems — cron exceptions, per-account processing failures, Discord send failures, and classifier rule-fallbacks — are posted to `DISCORD_DEBUG_CHANNEL_ID` when set. They are deduped by signature: the same problem is silenced for `DISCORD_DEBUG_COOLDOWN_MINUTES` (default 60) after it fires, so a persistent error pings once per window rather than every run. Leave the channel unset to disable.
+
+The cron path (`digest:daemon` and `digest:once`) discovers new inbox mail incrementally via the Gmail History API cursor; only the bootstrap/recovery scan is bounded by `GMAIL_LOOKBACK_HOURS`.
 
 ## Backfill and probes
 

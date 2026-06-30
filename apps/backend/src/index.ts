@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import { reportProblem, problemMessage } from './alerts.js';
 import { loadConfig } from './config.js';
 import { processUnreadMail, runDailyDigest, sendTodayDigest } from './digest.js';
 import { openDatabase } from './db.js';
@@ -29,8 +30,13 @@ if (mode === 'once') {
   cron.schedule(
     config.digest.processCron,
     () => {
-      processUnreadMail(config, db, mailGateway).catch((error) => {
+      processUnreadMail(config, db, mailGateway).catch(async (error) => {
         console.error(error);
+        await reportProblem(config, db, {
+          signature: `cron:process|${problemMessage(error).slice(0, 120)}`,
+          title: '定时处理任务异常',
+          detail: problemMessage(error)
+        });
       });
     },
     { timezone: config.digest.timezone }
@@ -40,8 +46,13 @@ if (mode === 'once') {
   cron.schedule(
     config.digest.cron,
     () => {
-      sendTodayDigest(config, db).catch((error) => {
+      sendTodayDigest(config, db).catch(async (error) => {
         console.error(error);
+        await reportProblem(config, db, {
+          signature: `cron:digest|${problemMessage(error).slice(0, 120)}`,
+          title: '定时摘要任务异常',
+          detail: problemMessage(error)
+        });
       });
     },
     { timezone: config.digest.timezone }
