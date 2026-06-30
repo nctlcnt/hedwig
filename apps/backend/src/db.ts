@@ -8,6 +8,7 @@ import type {
   CachedEmailPreview,
   Category,
   Classification,
+  CleanupCandidate,
   DigestItem,
   EmailMessage,
   ProcessingAction
@@ -102,7 +103,7 @@ export function saveEmailBodyCache(db: HedwigDb, email: EmailMessage): void {
     email.accountId,
     email.id,
     email.text,
-    JSON.stringify(extractLinks(email.text).map((url) => ({ url }))),
+    JSON.stringify(extractUsefulLinks(email.text)),
     now.toISOString(),
     expiresAt.toISOString()
   );
@@ -134,6 +135,21 @@ export function saveClassification(
     new Date().toISOString(),
     new Date().toISOString()
   );
+}
+
+// Returns which of the given Gmail ids have already been classified for this
+// account. This is the dedup signal that replaces relying on Gmail's read flag,
+// so processed mail can be left unread/in-inbox without being reprocessed (and
+// re-pushed to Discord) on the next run.
+export function findProcessedGmailIds(db: HedwigDb, accountId: string, gmailIds: string[]): Set<string> {
+  if (gmailIds.length === 0) return new Set();
+  const placeholders = gmailIds.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    select distinct gmail_id as gmailId
+    from message_classifications
+    where account_id = ? and gmail_id in (${placeholders})
+  `).all(accountId, ...gmailIds) as Array<{ gmailId: string }>;
+  return new Set(rows.map((row) => row.gmailId));
 }
 
 export function listProcessedDigestItems(
@@ -276,6 +292,105 @@ export function deleteExpiredEmailBodyCache(db: HedwigDb): number {
   return result.changes;
 }
 
+// Processed messages eligible for the cleanup pass: the latest classification per
+// message whose category is past its TTL cutoff and that has not already been
+// logged as trashed. `cutoffs` maps an eligible category to the ISO timestamp on
+// or before which a message of that category is considered expired.
+export function listCleanupCandidates(
+  db: HedwigDb,
+  accountId: string,
+  cutoffs: Partial<Record<Category, string>>,
+  limit: number
+): CleanupCandidate[] {
+  const eligible = Object.keys(cutoffs) as Category[];
+  if (eligible.length === 0 || limit <= 0) return [];
+
+  const conditions = eligible.map(() => '(c.category = ? and c.processed_at <= ?)').join(' or ');
+  const params: Array<string | number> = [accountId];
+  for (const category of eligible) {
+    params.push(category, cutoffs[category] as string);
+  }
+  params.push(limit);
+
+  const rows = db.prepare(`
+    select
+      m.account_id as accountId,
+      m.gmail_id as gmailId,
+      m.thread_id as threadId,
+      m.account as accountEmail,
+      m.sender as sender,
+      m.subject as subject,
+      c.category as category,
+      c.importance as importance,
+      c.summary as summary,
+      c.processed_at as processedAt
+    from messages m
+    join (
+      select account_id, gmail_id, max(id) as id
+      from message_classifications
+      group by account_id, gmail_id
+    ) latest
+      on latest.account_id = m.account_id
+      and latest.gmail_id = m.gmail_id
+    join message_classifications c
+      on c.id = latest.id
+    where m.account_id = ?
+      and not exists (
+        select 1 from cleanup_log cl
+        where cl.account_id = m.account_id and cl.gmail_id = m.gmail_id
+      )
+      and (${conditions})
+    order by c.processed_at asc
+    limit ?
+  `).all(...params) as Array<{
+    accountId: string;
+    gmailId: string;
+    threadId: string;
+    accountEmail: string;
+    sender: string;
+    subject: string;
+    category: Category;
+    importance: number;
+    summary: string;
+    processedAt: string;
+  }>;
+
+  return rows.map((row) => ({
+    accountId: row.accountId,
+    gmailId: row.gmailId,
+    threadId: row.threadId,
+    accountEmail: row.accountEmail,
+    from: row.sender,
+    subject: row.subject,
+    category: row.category,
+    importance: row.importance,
+    summary: row.summary,
+    processedAt: row.processedAt
+  }));
+}
+
+export function recordTrashed(
+  db: HedwigDb,
+  candidate: Pick<CleanupCandidate, 'accountId' | 'gmailId' | 'category' | 'importance' | 'processedAt'>,
+  reason: string
+): void {
+  db.prepare(`
+    insert into cleanup_log (account_id, gmail_id, category, importance, processed_at, trashed_at, reason)
+    values (?, ?, ?, ?, ?, ?, ?)
+    on conflict(account_id, gmail_id) do update set
+      trashed_at = excluded.trashed_at,
+      reason = excluded.reason
+  `).run(
+    candidate.accountId,
+    candidate.gmailId,
+    candidate.category,
+    candidate.importance,
+    candidate.processedAt,
+    new Date().toISOString(),
+    reason
+  );
+}
+
 function migrate(db: HedwigDb): void {
   const existingColumns = tableColumns(db, 'messages');
   if (existingColumns.includes('gmail_id') && !existingColumns.includes('account_id')) {
@@ -335,6 +450,17 @@ function migrate(db: HedwigDb): void {
       foreign key (account_id, gmail_id) references messages(account_id, gmail_id) on delete cascade
     );
 
+    create table if not exists cleanup_log (
+      account_id text not null,
+      gmail_id text not null,
+      category text not null,
+      importance integer not null default 0,
+      processed_at text,
+      trashed_at text not null,
+      reason text not null default '',
+      primary key (account_id, gmail_id)
+    );
+
     create index if not exists idx_message_classifications_run_id
       on message_classifications(run_id);
 
@@ -362,21 +488,193 @@ function parseMailId(mailId: string): { accountId: string; gmailId: string } | n
   };
 }
 
-function extractLinks(text: string): string[] {
-  const matches = text.match(/https?:\/\/[^\s<>"')\]]+/g) || [];
+type ScoredLink = {
+  url: string;
+  label: string;
+  score: number;
+  index: number;
+};
+
+const LINK_CONTEXT_TERMS = [
+  'apply',
+  'appointment',
+  'assignment',
+  'book',
+  'booking',
+  'calendar',
+  'class',
+  'course',
+  'deadline',
+  'docs',
+  'document',
+  'enrol',
+  'enroll',
+  'event',
+  'form',
+  'homework',
+  'invoice',
+  'join',
+  'login',
+  'meet',
+  'meeting',
+  'pay',
+  'portal',
+  'receipt',
+  'register',
+  'schedule',
+  'zoom',
+  '会议',
+  '作业',
+  '发票',
+  '报名',
+  '支付',
+  '文档',
+  '日程',
+  '申请',
+  '课程',
+  '链接',
+  '预约'
+];
+
+const NOISY_LINK_TERMS = [
+  'beacon',
+  'email-preferences',
+  'pixel',
+  'preferences',
+  'profile_center',
+  'tracking',
+  'unsubscribe',
+  'view-in-browser',
+  'webversion'
+];
+
+const STATIC_FILE_RE = /\.(?:avif|css|gif|ico|jpe?g|js|png|svg|webp)(?:[?#]|$)/i;
+const REDIRECT_PARAMS = ['url', 'u', 'target', 'redirect', 'redirect_url', 'destination'];
+const MIN_LINK_SCORE = 8;
+
+function extractUsefulLinks(text: string): Array<{ url: string; label: string }> {
+  const matches = Array.from(text.matchAll(/https?:\/\/[^\s<>"')\]]+/g));
   const seen = new Set<string>();
-  const links: string[] = [];
-  for (const raw of matches) {
-    const url = raw.replace(/[.,;:!?]+$/g, '');
-    if (seen.has(url)) continue;
-    seen.add(url);
-    links.push(url);
-    if (links.length >= 10) break;
+  const byDomain = new Map<string, number>();
+  const scored: ScoredLink[] = [];
+
+  for (const match of matches) {
+    const url = cleanUrl(match[0]);
+    const displayUrl = displayUrlFor(url);
+    const parsed = parseUrl(displayUrl);
+    if (!parsed) continue;
+    if (seen.has(displayUrl)) continue;
+    seen.add(displayUrl);
+
+    const domain = displayDomain(parsed);
+    const domainCount = byDomain.get(domain) || 0;
+    const score = linkScore(url, displayUrl, parsed, text, match.index || 0, domainCount);
+    if (score <= 0) continue;
+
+    byDomain.set(domain, domainCount + 1);
+    scored.push({
+      url: displayUrl,
+      label: linkLabel(parsed),
+      score,
+      index: match.index || 0
+    });
   }
-  return links;
+
+  return scored
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .filter((link) => link.score >= MIN_LINK_SCORE)
+    .slice(0, 5)
+    .map(({ url, label }) => ({ url, label }));
 }
 
-function parseLinks(raw: string): Array<{ url: string }> {
+function cleanUrl(raw: string): string {
+  return raw.replace(/[.,;:!?]+$/g, '');
+}
+
+function parseUrl(url: string): URL | null {
+  try {
+    return new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+function displayUrlFor(url: string): string {
+  const parsed = parseUrl(url);
+  if (!parsed) return url;
+  for (const param of REDIRECT_PARAMS) {
+    const value = parsed.searchParams.get(param);
+    if (!value) continue;
+    const nested = parseUrl(value);
+    if (nested?.protocol === 'http:' || nested?.protocol === 'https:') {
+      return nested.toString();
+    }
+  }
+  return url;
+}
+
+function displayDomain(url: URL): string {
+  return url.hostname.replace(/^www\./, '').toLowerCase();
+}
+
+function linkScore(
+  originalUrl: string,
+  displayUrl: string,
+  parsed: URL,
+  text: string,
+  index: number,
+  domainCount: number
+): number {
+  const haystack = `${originalUrl} ${displayUrl}`.toLowerCase();
+  if (STATIC_FILE_RE.test(parsed.pathname)) return 0;
+  if (isNoisyLink(haystack, parsed)) return 0;
+
+  let score = 2;
+  const domain = displayDomain(parsed);
+  const context = text.slice(Math.max(0, index - 140), index + 220).toLowerCase();
+  if (LINK_CONTEXT_TERMS.some((term) => context.includes(term))) score += 18;
+  if (LINK_CONTEXT_TERMS.some((term) => haystack.includes(term))) score += 8;
+  if (importantDomain(domain)) score += 12;
+  if (parsed.searchParams.size > 6) score -= 5;
+  if (originalUrl.length > 250) score -= 5;
+  if (domainCount > 0) score -= domainCount * 8;
+  return score;
+}
+
+function isNoisyLink(haystack: string, parsed: URL): boolean {
+  if (NOISY_LINK_TERMS.some((term) => haystack.includes(term))) return true;
+  if (/(^|\/)(click|open)(\/|$)/i.test(parsed.pathname)) return true;
+  return parsed.searchParams.has('utm_medium')
+    && parsed.searchParams.get('utm_medium')?.toLowerCase() === 'email'
+    && parsed.searchParams.size > 5;
+}
+
+function importantDomain(domain: string): boolean {
+  return [
+    'calendly.com',
+    'calendar.google.com',
+    'docs.google.com',
+    'drive.google.com',
+    'forms.gle',
+    'github.com',
+    'meet.google.com',
+    'notion.so',
+    'stripe.com',
+    'zoom.us'
+  ].some((item) => domain === item || domain.endsWith(`.${item}`));
+}
+
+function linkLabel(url: URL): string {
+  const domain = displayDomain(url);
+  const path = url.pathname
+    .split('/')
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('/');
+  return path ? `打开 ${domain}/${path}` : `打开 ${domain}`;
+}
+
+function parseLinks(raw: string): Array<{ url: string; label?: string }> {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -384,11 +682,12 @@ function parseLinks(raw: string): Array<{ url: string }> {
       .map((item) => {
         if (typeof item === 'string') return { url: item };
         if (item && typeof item === 'object' && 'url' in item && typeof item.url === 'string') {
-          return { url: item.url };
+          const label = 'label' in item && typeof item.label === 'string' ? item.label : undefined;
+          return label ? { url: item.url, label } : { url: item.url };
         }
         return null;
       })
-      .filter((item): item is { url: string } => Boolean(item));
+      .filter((item): item is { url: string; label?: string } => Boolean(item));
   } catch {
     return [];
   }

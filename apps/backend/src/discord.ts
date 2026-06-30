@@ -1,4 +1,4 @@
-import type { AppConfig, Category, DigestItem, DigestReport, DigestSection } from './types.js';
+import type { AppConfig, Category, ClassifierFailure, DigestItem, DigestReport, DigestSection } from './types.js';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const REPORT_CATEGORIES: Category[] = ['action', 'fyi', 'course', 'admin'];
@@ -66,6 +66,54 @@ export async function sendDiscordRealtime(config: AppConfig, item: DigestItem): 
     }],
     allowed_mentions: { parse: [] }
   }, [item]));
+}
+
+const MAX_ALERT_ITEMS = 10;
+
+export async function sendDiscordClassifierAlert(
+  config: AppConfig,
+  account: string,
+  failures: ClassifierFailure[]
+): Promise<void> {
+  if (failures.length === 0) return;
+  const channelId = config.discord.realtimeChannelId || config.discord.digestChannelId;
+  if (!channelId) {
+    console.info('Skipping classifier failure alert: no Discord channel configured');
+    return;
+  }
+
+  const shown = failures.slice(0, MAX_ALERT_ITEMS);
+  const lines = shown.map((failure) => (
+    `• **${displaySender(failure.from)}** · ${escapeMarkdown(alertSubject(failure.subject))}\n  [打开 Gmail](${failure.gmailUrl})`
+  ));
+  const moreLine = failures.length > MAX_ALERT_ITEMS
+    ? [`…还有 ${failures.length - MAX_ALERT_ITEMS} 封`]
+    : [];
+  const reasons = [...new Set(failures.map((failure) => failure.reason).filter(Boolean))].slice(0, 3);
+  const reasonLine = reasons.length > 0 ? ['', `原因：${escapeMarkdown(reasons.join(' / ')).slice(0, 400)}`] : [];
+
+  await postMessage(config, channelId, {
+    content: null,
+    embeds: [{
+      title: `⚠️ ${failures.length} 封邮件 AI 分类失败（已用规则兜底）`,
+      description: limitDescription([
+        `账号 **${escapeMarkdown(account)}**：以下邮件的 AI 分类失败，已退回规则分类，可能不准确，请手动确认是否需要处理。`,
+        '',
+        ...lines,
+        ...moreLine,
+        ...reasonLine
+      ].join('\n')),
+      color: 0xf59e0b,
+      timestamp: new Date().toISOString()
+    }],
+    allowed_mentions: { parse: [] }
+  });
+}
+
+function alertSubject(subject: string): string {
+  const raw = subject.replace(/\s+/g, ' ').trim();
+  if (!raw) return '(no subject)';
+  return raw.length > 90 ? `${raw.slice(0, 88)}…` : raw;
 }
 
 function authHeaders(config: AppConfig): Record<string, string> {

@@ -13,8 +13,8 @@ This repo now contains the first runnable Hedwig slice:
 - classifies each message conservatively, with Junk requiring unsubscribe or marketing evidence
 - applies one `AUTO/*` label to each message
 - sends the digest to Discord through the Hedwig bot instead of emailing it back to Gmail
-- marks digested messages as read after the Discord digest is sent
-- never replies, archives, deletes, trashes, or touches Drive
+- leaves processed mail unread and in the Inbox to triage by hand (which messages were handled is tracked in SQLite, not the read flag); only junk and disposable one-time codes are removed from the Inbox
+- never replies, sends, permanently deletes, or touches Drive (the opt-in `cleanup` command moves expired processed mail to Trash, recoverable for 30 days)
 
 ## repo layout
 
@@ -57,6 +57,21 @@ CLASSIFIER_PROVIDER_NAME=deepseek
 Use `CLASSIFIER_PROVIDER=rule` to run without an LLM. Legacy `CLASSIFIER_PROVIDER=deepseek`,
 `DEEPSEEK_API_KEY`, and `DEEPSEEK_MODEL` are still accepted.
 
+#### personal classifier rules
+
+You can steer the LLM classifier with plain natural-language rules. Copy
+`config/classifier-rules.example.md` to `config/classifier-rules.md` (or point
+`CLASSIFIER_RULES_FILE` elsewhere) and write rules like “mail from my supervisor
+is always action” or “promotions@\* is junk”. The file is appended to the
+classifier prompt as the highest-priority instructions. Only the
+`openai-compatible` provider reads it; the `rule` provider ignores it.
+
+Note: the classifier keeps a guardrail (`hasJunkEvidence`) that downgrades a
+`junk` verdict to `fyi` unless the message also looks like bulk/marketing mail
+(unsubscribe header or promo language). So a rule that calls a non-marketing
+sender “junk” lands as `fyi`; it is still cleaned up, just on the longer `fyi`
+TTL rather than immediately.
+
 For GLM, set:
 
 ```text
@@ -77,7 +92,7 @@ Required Gmail OAuth scope:
 https://www.googleapis.com/auth/gmail.modify
 ```
 
-`gmail.modify` is needed because Hedwig creates and applies labels, then marks digested messages as read. The code does not call reply, send, archive, delete, trash, or Drive APIs.
+`gmail.modify` is needed because Hedwig creates and applies labels, marks digested messages as read, and — only through the opt-in `cleanup` command — moves expired processed mail to Gmail Trash (recoverable for 30 days). The code does not call reply, send, permanent-delete, or Drive APIs.
 
 To get a Gmail refresh token, first fill these values in `.env`:
 
@@ -164,6 +179,35 @@ npm run backfill:unread 1      # smoke test: 1 message per account
 ```
 
 `backfill:unread` ignores `GMAIL_LOOKBACK_HOURS` and reuses the same pipeline as the daemon (classify, Discord push, SQLite, mark read, Inbox cleanup). Run `backfill:unread 1` after changing the classifier provider, base URL, or model to verify the LLM end-to-end path against real Gmail with minimal side effects.
+
+### clean up expired processed mail
+
+When you have spare time, trash old processed mail that has aged out and never
+needed follow-up:
+
+```bash
+npm run cleanup                # DRY-RUN: print the messages that would be trashed
+npm run cleanup -- --apply     # move them to Gmail Trash (recoverable for 30 days)
+```
+
+`cleanup` only looks at mail Hedwig already processed (in SQLite). A message is
+eligible when its category is past that category's TTL:
+
+```text
+CLEANUP_TTL_JUNK_DAYS=0        # junk is disposable as soon as it is processed
+CLEANUP_TTL_FYI_DAYS=14
+CLEANUP_TTL_ADMIN_DAYS=30
+CLEANUP_TTL_COURSE_DAYS=never  # course is never auto-trashed (default)
+CLEANUP_TTL_ACTION_DAYS=never  # action is never auto-trashed (default)
+CLEANUP_MAX_PER_ACCOUNT=200    # cap candidates checked per account per run
+```
+
+Set any `CLEANUP_TTL_*_DAYS` to `never` (or omit it) to keep that category
+forever. Before trashing, `cleanup` re-checks each candidate's live Gmail state
+and **keeps** anything that is currently starred or carries the
+`Hedwig/Followup` label — that is how a message is marked “needs follow-up”.
+Trashed message ids are recorded in the `cleanup_log` table so later runs skip
+them. Dry-run is the default; nothing is deleted without `--apply`.
 
 ### probe scripts
 

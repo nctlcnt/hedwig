@@ -11,7 +11,7 @@ Categories:
 - fyi: Useful to know, but no reply or decision is needed.
 - course: Course material, lecture/tutorial notes, readings, school references, assignments, or learning resources.
 - admin: Finance, registration, account, security, payment, receipts, system notifications, verification, or official administrative messages.
-- junk: Marketing subscriptions, automatic promotions, obvious bulk advertising, or low-value campaigns.
+- junk: Marketing subscriptions, automatic promotions, obvious bulk advertising, low-value campaigns, or disposable one-time codes (OTP / 2FA / login verification codes) that the user reads and deletes immediately.
 
 Rules:
 - Be conservative with junk. If unsure, use fyi.
@@ -22,13 +22,11 @@ Rules:
   messages, receipts, or anything plausibly requiring follow-up should usually
   be action rather than junk.
 - Gmail state is handled outside the classifier:
-  - unread means Hedwig has not processed the message.
-  - read means Hedwig has processed the message.
-  - starred means the user explicitly wants follow-up and the message may stay
-    in Inbox.
-  - unstarred processed messages are removed from Inbox.
-  - Hedwig/Followup is the only Hedwig-managed Gmail label and is reserved for
-    explicit follow-up tracking/history.
+  - Hedwig tracks which messages it has processed in its own database, not via
+    the read flag. By default it leaves processed mail unread and in the Inbox
+    for the user to triage; only junk (incl. one-time codes) is removed.
+  - starred means the user explicitly wants follow-up; starred mail always stays
+    in the Inbox.
 - Summary should be one or two compact sentences in the email's most natural
   language. Include concrete context such as the requested action, deadline,
   amount, course, sender, or consequence when present. Avoid vague summaries

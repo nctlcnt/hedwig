@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import OpenAI from 'openai';
 import type { ChatCompletion } from 'openai/resources/chat/completions';
 import type { gmail_v1 } from 'googleapis';
 import { classifyEmail, normalizeClassification } from '../classifier.js';
-import type { AppConfig, EmailClassifier, EmailMessage } from '../types.js';
+import type { AppConfig, EmailClassifier, EmailMessage, LlmClassifierConfig } from '../types.js';
 
 const prompt = readFileSync(new URL('../../prompts/email-classifier.md', import.meta.url), 'utf8');
 
@@ -21,39 +21,81 @@ export function createOpenAICompatibleClassifier(config: AppConfig): EmailClassi
     throw new Error('CLASSIFIER_API_KEY is required when CLASSIFIER_PROVIDER=openai-compatible');
   }
 
-  const client = new OpenAI({
-    baseURL: config.classifier.llm.baseUrl,
-    apiKey: config.classifier.llm.apiKey
-  });
+  const systemPrompt = buildSystemPrompt(config.classifier.rulesPath);
+  const primary = createSingleLlmClassifier(config.classifier.llm, systemPrompt);
+  const fallback = config.classifier.fallbackLlm
+    ? createSingleLlmClassifier(config.classifier.fallbackLlm, systemPrompt)
+    : null;
 
   return {
     async classify(email: EmailMessage) {
+      const failures: string[] = [];
       try {
-        const completion = (await client.chat.completions.create({
-          model: config.classifier.llm.model,
-          messages: [
-            { role: 'system', content: `${prompt}\n\n${SCHEMA_HINT}` },
-            { role: 'user', content: buildUserContent(email) }
-          ],
-          response_format: { type: 'json_object' },
-          temperature: 0.2,
-          stream: false
-        } as Parameters<typeof client.chat.completions.create>[0])) as ChatCompletion;
-
-        const text = completion.choices[0]?.message?.content || '{}';
-        const parsed = JSON.parse(text);
-        return normalizeClassification(email, parsed, config.classifier.llm.providerName);
+        return await primary.classify(email);
       } catch (error) {
-        console.warn(`${config.classifier.llm.providerName} classification failed; falling back to rules: ${error instanceof Error ? error.message : String(error)}`);
-        const fallback = classifyEmail(email);
-        return {
-          ...fallback,
-          provider: 'rule-fallback',
-          reason: `${config.classifier.llm.providerName} failed: ${error instanceof Error ? error.message : String(error)}`
-        };
+        const message = `${config.classifier.llm.providerName} failed: ${errorMessage(error)}`;
+        failures.push(message);
+        console.warn(`${message}; ${fallback ? 'trying fallback classifier' : 'falling back to rules'}`);
       }
+
+      if (fallback && config.classifier.fallbackLlm) {
+        try {
+          return await fallback.classify(email);
+        } catch (error) {
+          const message = `${config.classifier.fallbackLlm.providerName} failed: ${errorMessage(error)}`;
+          failures.push(message);
+          console.warn(`${message}; falling back to rules`);
+        }
+      }
+
+      const ruled = classifyEmail(email);
+      return {
+        ...ruled,
+        provider: 'rule-fallback',
+        reason: failures.join(' | ')
+      };
     }
   };
+}
+
+function createSingleLlmClassifier(llm: LlmClassifierConfig, systemPrompt: string): EmailClassifier {
+  const client = new OpenAI({ baseURL: llm.baseUrl, apiKey: llm.apiKey });
+
+  return {
+    async classify(email: EmailMessage) {
+      const completion = (await client.chat.completions.create({
+        model: llm.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: buildUserContent(email) }
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.2,
+        stream: false
+      } as Parameters<typeof client.chat.completions.create>[0])) as ChatCompletion;
+
+      const text = completion.choices[0]?.message?.content || '{}';
+      const parsed = JSON.parse(text);
+      return normalizeClassification(email, parsed, llm.providerName);
+    }
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function buildSystemPrompt(rulesPath: string): string {
+  const base = `${prompt}\n\n${SCHEMA_HINT}`;
+  const rules = loadUserRules(rulesPath);
+  if (!rules) return base;
+
+  return `${base}\n\nUSER RULES (highest priority — when these conflict with the general guidance above, follow the user rules). These are written by the inbox owner in natural language:\n${rules}`;
+}
+
+function loadUserRules(rulesPath: string): string {
+  if (!rulesPath || !existsSync(rulesPath)) return '';
+  return readFileSync(rulesPath, 'utf8').trim();
 }
 
 function buildUserContent(email: EmailMessage): string {

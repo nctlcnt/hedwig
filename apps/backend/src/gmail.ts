@@ -108,6 +108,38 @@ export async function removeFromInbox(gmail: GmailClient, messageIds: string[]):
   });
 }
 
+// Returns the current label ids for a message, or null if Gmail no longer has it
+// (already deleted out of band). Uses the minimal format to avoid downloading
+// the body during the cleanup pass.
+export async function getMessageLabels(gmail: GmailClient, id: string): Promise<string[] | null> {
+  try {
+    const response = await gmail.users.messages.get({
+      userId: 'me',
+      id,
+      format: 'minimal'
+    });
+    return response.data.labelIds || [];
+  } catch (error) {
+    if (isNotFoundError(error)) return null;
+    throw error;
+  }
+}
+
+export async function trashMessages(gmail: GmailClient, messageIds: string[]): Promise<void> {
+  // Gmail rejects adding the TRASH label through messages.modify, so each message
+  // must go through the dedicated trash endpoint. Trashed mail is recoverable
+  // from Gmail's Trash for 30 days.
+  for (const id of messageIds) {
+    await gmail.users.messages.trash({ userId: 'me', id });
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: unknown; status?: unknown; response?: { status?: unknown } };
+  return candidate.code === 404 || candidate.status === 404 || candidate.response?.status === 404;
+}
+
 function normalizeMessage(
   message: gmail_v1.Schema$Message,
   account: GmailAccountConfig,

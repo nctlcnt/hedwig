@@ -3,10 +3,12 @@ import {
   ensureFollowupLabel,
   getCurrentUser,
   getMessage,
+  getMessageLabels,
   listRecentInboxMessages,
   listUnreadInboxMessages,
   markMessagesRead,
-  removeFromInbox
+  removeFromInbox,
+  trashMessages
 } from '../gmail.js';
 import type { AppConfig, EmailMessage, GmailAccountConfig, GmailClient } from '../types.js';
 import type { MailAccount, MailGateway, MailListOptions, MailMessageRef } from './mail-gateway.js';
@@ -50,12 +52,20 @@ class GmailMailGateway implements MailGateway {
     return getMessage(this.clientFor(account), this.configFor(account), accountEmail, id);
   }
 
+  async getMessageLabels(account: MailAccount, id: string): Promise<string[] | null> {
+    return getMessageLabels(this.clientFor(account), id);
+  }
+
   async markMessagesRead(account: MailAccount, messageIds: string[]): Promise<void> {
     await markMessagesRead(this.clientFor(account), messageIds);
   }
 
   async removeFromInbox(account: MailAccount, messageIds: string[]): Promise<void> {
     await removeFromInbox(this.clientFor(account), messageIds);
+  }
+
+  async trashMessages(account: MailAccount, messageIds: string[]): Promise<void> {
+    await trashMessages(this.clientFor(account), messageIds);
   }
 
   private clientFor(account: MailAccount): GmailClient {

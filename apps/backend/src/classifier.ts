@@ -91,6 +91,29 @@ const adminTerms = [
   '验证码'
 ];
 
+const verificationCodeTerms = [
+  'verification code',
+  'one-time password',
+  'one time password',
+  'one-time passcode',
+  'passcode',
+  'security code',
+  'login code',
+  'sign-in code',
+  'sign in code',
+  'authentication code',
+  '2fa code',
+  'otp',
+  'is your code',
+  'your code is',
+  '验证码',
+  '校验码',
+  '动态码',
+  '登录码',
+  '安全码',
+  '一次性密码'
+];
+
 const promoTerms = [
   'sale',
   'discount',
@@ -120,6 +143,14 @@ function normalize(text: string): string {
   return text.toLowerCase();
 }
 
+export function isVerificationCode(email: EmailMessage): boolean {
+  // Match only on subject + snippet (not the full body) so an unrelated email
+  // that merely mentions a code in its footer is not swept up. These one-time
+  // codes are disposable: classify as junk so they are never pushed or digested.
+  const haystack = normalize(`${email.subject} ${email.snippet}`);
+  return includesAny(haystack, verificationCodeTerms);
+}
+
 export function hasJunkEvidence(email: EmailMessage): boolean {
   const haystack = normalize(`${email.from} ${email.subject} ${email.snippet} ${email.text}`);
   const listUnsubscribe = headerValue(email.headers, 'List-Unsubscribe');
@@ -147,7 +178,7 @@ export function classifyEmail(email: EmailMessage): Classification {
   const haystack = normalize(`${email.from} ${email.subject} ${email.snippet} ${email.text}`);
 
   let category: Category = 'fyi';
-  if (hasJunkEvidence(email)) {
+  if (hasJunkEvidence(email) || isVerificationCode(email)) {
     category = 'junk';
   } else if (includesAny(haystack, actionTerms)) {
     category = 'action';
@@ -175,7 +206,7 @@ export function normalizeClassification(
   let category: Category = classification.category && allowed.has(classification.category)
     ? classification.category
     : 'fyi';
-  if (category === 'junk' && !hasJunkEvidence(email)) {
+  if (category === 'junk' && !hasJunkEvidence(email) && !isVerificationCode(email)) {
     category = 'fyi';
   }
 

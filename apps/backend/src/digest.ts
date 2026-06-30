@@ -4,6 +4,7 @@ import { createClassifier } from './classifiers.js';
 import {
   createDigestRun,
   failDigestRun,
+  findProcessedGmailIds,
   finishDigestRun,
   listProcessedDigestItems,
   saveEmailBodyCache,
@@ -11,12 +12,13 @@ import {
   saveMessage,
   updateDigestRunAccount
 } from './db.js';
-import { sendDiscordDigest, sendDiscordRealtime } from './discord.js';
+import { sendDiscordClassifierAlert, sendDiscordDigest, sendDiscordRealtime } from './discord.js';
 import { summarizeSections } from './llm/section-narrator.js';
 import type {
   AppConfig,
   Category,
   Classification,
+  ClassifierFailure,
   DigestAccountSummary,
   DigestItem,
   DigestReport,
@@ -35,6 +37,19 @@ type AccountProcessResult = {
   total: number;
   error?: string;
 };
+
+// What Hedwig does to a message in Gmail after processing it. Dedup is tracked
+// in the database (see findProcessedGmailIds), so the default leaves the message
+// untouched: still unread, still in the inbox, for the user to triage by hand.
+type SideEffects = {
+  markRead: boolean;
+  archiveUnstarred: boolean;
+};
+
+const PASSIVE_SIDE_EFFECTS: SideEffects = { markRead: false, archiveUnstarred: false };
+// Backfill drains a large unread backlog; it still marks read so successive runs
+// can page past what it already handled. It leaves mail in the inbox.
+const BACKFILL_SIDE_EFFECTS: SideEffects = { markRead: true, archiveUnstarred: false };
 
 export async function runDailyDigest(config: AppConfig, db: HedwigDb, mailGateway: MailGateway): Promise<DigestReport> {
   const results = await processUnreadMail(config, db, mailGateway);
@@ -88,7 +103,7 @@ async function processAccountUnreadMail(
   mailGateway: MailGateway,
   db: HedwigDb
 ): Promise<AccountProcessResult> {
-  return runAccountClassificationPass(config, accountConfig, mailGateway, db, async () => (
+  return runAccountClassificationPass(config, accountConfig, mailGateway, db, PASSIVE_SIDE_EFFECTS, async () => (
     mailGateway.listRecentInboxMessages(accountConfig, {
       ...config.digest,
       unreadOnly: true
@@ -103,7 +118,7 @@ async function backfillAccountUnreadMail(
   db: HedwigDb,
   limit: number
 ): Promise<AccountProcessResult> {
-  return runAccountClassificationPass(config, accountConfig, mailGateway, db, async () => (
+  return runAccountClassificationPass(config, accountConfig, mailGateway, db, BACKFILL_SIDE_EFFECTS, async () => (
     mailGateway.listUnreadInboxMessages(accountConfig, { limit })
   ));
 }
@@ -113,20 +128,25 @@ async function runAccountClassificationPass(
   accountConfig: MailAccount,
   mailGateway: MailGateway,
   db: HedwigDb,
+  sideEffects: SideEffects,
   fetchRefs: () => Promise<{ id?: string | null }[]>
 ): Promise<AccountProcessResult> {
   let account = accountConfig.displayName;
   const runId = createDigestRun(db, accountConfig.id, account, new Date());
   const counts = zeroCounts();
   const classifier = createClassifier(config);
+  const classifierFailures: ClassifierFailure[] = [];
 
   try {
     account = await mailGateway.getCurrentUser(accountConfig);
     updateDigestRunAccount(db, runId, account);
     const refs = await fetchRefs();
+    const candidateIds = refs.map((ref) => ref.id).filter((id): id is string => Boolean(id));
+    const alreadyProcessed = findProcessedGmailIds(db, accountConfig.id, candidateIds);
 
     for (const ref of refs) {
       if (!ref.id) continue;
+      if (alreadyProcessed.has(ref.id)) continue;
       const email = await mailGateway.getMessage(accountConfig, account, ref.id);
       if (email.labelIds.includes('SPAM') || email.labelIds.includes('TRASH')) {
         continue;
@@ -135,7 +155,20 @@ async function runAccountClassificationPass(
       const classification = await classifier.classify(email);
       const processedAs = processingAction(classification.category);
 
-      if (!shouldKeepInInbox(email)) {
+      if (classification.provider === 'rule-fallback') {
+        classifierFailures.push({
+          from: email.from,
+          subject: email.subject,
+          gmailUrl: email.gmailUrl,
+          reason: classification.reason || 'classifier unavailable'
+        });
+      }
+
+      // Junk (incl. one-time codes) always leaves the inbox; other categories
+      // only when archive-everything is on. Starred mail always stays.
+      const archive = !shouldKeepInInbox(email)
+        && (processedAs === 'archive' || sideEffects.archiveUnstarred);
+      if (archive) {
         await mailGateway.removeFromInbox(accountConfig, [email.id]);
       }
       if (processedAs === 'push_now') {
@@ -145,9 +178,13 @@ async function runAccountClassificationPass(
       saveMessage(db, account, email);
       saveEmailBodyCache(db, email);
       saveClassification(db, runId, email, classification, processedAs);
-      await mailGateway.markMessagesRead(accountConfig, [email.id]);
+      if (sideEffects.markRead) {
+        await mailGateway.markMessagesRead(accountConfig, [email.id]);
+      }
       counts[classification.category] += 1;
     }
+
+    await notifyClassifierFailures(config, account, classifierFailures);
 
     const total = totalCount(counts);
     finishDigestRun(db, runId, total);
@@ -170,6 +207,20 @@ async function runAccountClassificationPass(
       total: totalCount(counts),
       error: errorMessage(error)
     };
+  }
+}
+
+async function notifyClassifierFailures(
+  config: AppConfig,
+  account: string,
+  failures: ClassifierFailure[]
+): Promise<void> {
+  if (failures.length === 0) return;
+  try {
+    await sendDiscordClassifierAlert(config, account, failures);
+  } catch (error) {
+    // An alert failure must not fail the whole run; the mail is already saved.
+    console.error('Failed to post classifier failure alert', error);
   }
 }
 

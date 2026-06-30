@@ -66,11 +66,26 @@ function bodyPreview(text: string): string {
 
 function linkBlock(preview: CachedEmailPreview): string {
   if (preview.links.length === 0) return '';
-  const lines = preview.links.slice(0, 8).map((link, index) => {
-    const label = truncate(link.url, 80);
+  const lines = preview.links.slice(0, 5).map((link, index) => {
+    const label = truncate(link.label || fallbackLinkLabel(link.url), 80);
     return `${index + 1}. [${escapeMarkdown(label)}](${link.url})`;
   });
-  return `**重要链接**\n${lines.join('\n')}`;
+  return `**可能有用的链接**\n${lines.join('\n')}`;
+}
+
+function fallbackLinkLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const domain = parsed.hostname.replace(/^www\./, '').toLowerCase();
+    const path = parsed.pathname
+      .split('/')
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('/');
+    return path ? `打开 ${domain}/${path}` : `打开 ${domain}`;
+  } catch {
+    return url;
+  }
 }
 
 function truncate(text: string, limit: number): string {

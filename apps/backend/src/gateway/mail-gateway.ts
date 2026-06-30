@@ -22,6 +22,8 @@ export type MailGateway = {
   listRecentInboxMessages(account: MailAccount, options: MailListOptions): Promise<MailMessageRef[]>;
   listUnreadInboxMessages(account: MailAccount, options: { limit: number }): Promise<MailMessageRef[]>;
   getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage>;
+  getMessageLabels(account: MailAccount, id: string): Promise<string[] | null>;
   markMessagesRead(account: MailAccount, messageIds: string[]): Promise<void>;
   removeFromInbox(account: MailAccount, messageIds: string[]): Promise<void>;
+  trashMessages(account: MailAccount, messageIds: string[]): Promise<void>;
 };

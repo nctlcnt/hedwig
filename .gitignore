@@ -4,3 +4,4 @@ data/
 dist/
 config/gmail-accounts.json
 config/google-tokens/
+config/classifier-rules.md
