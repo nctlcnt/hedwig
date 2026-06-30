@@ -7,7 +7,7 @@ tracking this stack in [邮件-digest-overview](https://linear.app/chachas/proje
 This repo now contains the first runnable Hedwig slice:
 
 - reads one or more configured Gmail account inboxes for the past 24 hours
-- ignores read messages by default (`GMAIL_UNREAD_ONLY=true`)
+- discovers new inbox mail via the Gmail History API with a per-account `historyId` cursor, independent of read/star/label state
 - excludes Spam and Trash
 - creates only the allowed Gmail labels: `AUTO/action`, `AUTO/fyi`, `AUTO/course`, `AUTO/admin`, `AUTO/junk`, `AUTO/digest`
 - classifies each message conservatively, with Junk requiring unsubscribe or marketing evidence
@@ -167,9 +167,7 @@ DIGEST_TIMEZONE=Australia/Sydney
 DIGEST_CRON=0 19 * * *
 ```
 
-By default Hedwig only scans unread inbox messages. Set `GMAIL_UNREAD_ONLY=false` only for backfills or debugging.
-
-The cron path (`digest:daemon` and `digest:once`) only considers unread mail inside the `GMAIL_LOOKBACK_HOURS` window. Older unread mail is left alone — drain it explicitly with `backfill:unread`.
+The cron path (`digest:daemon` and `digest:once`) discovers new inbox mail through the Gmail History API, using a per-account `historyId` cursor stored in SQLite (`sync_state`). Discovery is therefore independent of Gmail's read/star/label state — reading a message yourself no longer hides it from Hedwig. The first run (or a cursor that has aged out of Gmail's history retention) bootstraps by scanning the recent `GMAIL_LOOKBACK_HOURS` window once and capturing the current cursor; from then on each run only pulls messages added since the cursor. SQLite (`message_classifications`) remains the idempotency guard, so nothing is processed twice. `GMAIL_UNREAD_ONLY` no longer affects the daemon.
 
 ### backfill older unread mail
 
@@ -178,7 +176,7 @@ npm run backfill:unread        # 30 most-recent unread per account
 npm run backfill:unread 1      # smoke test: 1 message per account
 ```
 
-`backfill:unread` ignores `GMAIL_LOOKBACK_HOURS` and reuses the same pipeline as the daemon (classify, Discord push, SQLite, mark read, Inbox cleanup). Run `backfill:unread 1` after changing the classifier provider, base URL, or model to verify the LLM end-to-end path against real Gmail with minimal side effects.
+`backfill:unread` drains an unread backlog that predates the cursor's reach. It reuses the same pipeline as the daemon (classify, Discord push, SQLite) but marks handled mail read so repeated runs page through the backlog. Run `backfill:unread 1` after changing the classifier provider, base URL, or model to verify the LLM end-to-end path against real Gmail with minimal side effects.
 
 ### clean up expired processed mail
 

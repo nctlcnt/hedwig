@@ -8,10 +8,11 @@ import {
   listUnreadInboxMessages,
   markMessagesRead,
   removeFromInbox,
+  syncInboxMessages,
   trashMessages
 } from '../gmail.js';
 import type { AppConfig, EmailMessage, GmailAccountConfig, GmailClient } from '../types.js';
-import type { MailAccount, MailGateway, MailListOptions, MailMessageRef } from './mail-gateway.js';
+import type { MailAccount, MailGateway, MailListOptions, MailMessageRef, MailSyncOptions, MailSyncResult } from './mail-gateway.js';
 
 export function createGmailMailGateway(config: AppConfig): MailGateway {
   return new GmailMailGateway(config);
@@ -46,6 +47,11 @@ class GmailMailGateway implements MailGateway {
 
   async listUnreadInboxMessages(account: MailAccount, options: { limit: number }): Promise<MailMessageRef[]> {
     return listUnreadInboxMessages(this.clientFor(account), options.limit);
+  }
+
+  async syncInboxMessages(account: MailAccount, options: MailSyncOptions): Promise<MailSyncResult> {
+    const result = await syncInboxMessages(this.clientFor(account), options);
+    return { refs: result.messages, cursor: result.cursor, reset: result.reset };
   }
 
   async getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage> {

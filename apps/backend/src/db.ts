@@ -137,6 +137,26 @@ export function saveClassification(
   );
 }
 
+// The per-account incremental-sync cursor (a Gmail historyId). This is how
+// Hedwig discovers new inbox mail without depending on Gmail's read/star/label
+// state. Null until the first run bootstraps it.
+export function getSyncCursor(db: HedwigDb, accountId: string): string | null {
+  const row = db.prepare(`
+    select history_id as historyId from sync_state where account_id = ?
+  `).get(accountId) as { historyId: string } | undefined;
+  return row?.historyId ?? null;
+}
+
+export function setSyncCursor(db: HedwigDb, accountId: string, historyId: string): void {
+  db.prepare(`
+    insert into sync_state (account_id, history_id, updated_at)
+    values (?, ?, ?)
+    on conflict(account_id) do update set
+      history_id = excluded.history_id,
+      updated_at = excluded.updated_at
+  `).run(accountId, historyId, new Date().toISOString());
+}
+
 // Returns which of the given Gmail ids have already been classified for this
 // account. This is the dedup signal that replaces relying on Gmail's read flag,
 // so processed mail can be left unread/in-inbox without being reprocessed (and
@@ -459,6 +479,12 @@ function migrate(db: HedwigDb): void {
       trashed_at text not null,
       reason text not null default '',
       primary key (account_id, gmail_id)
+    );
+
+    create table if not exists sync_state (
+      account_id text not null primary key,
+      history_id text not null,
+      updated_at text not null
     );
 
     create index if not exists idx_message_classifications_run_id

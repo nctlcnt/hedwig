@@ -6,10 +6,12 @@ import {
   failDigestRun,
   findProcessedGmailIds,
   finishDigestRun,
+  getSyncCursor,
   listProcessedDigestItems,
   saveEmailBodyCache,
   saveClassification,
   saveMessage,
+  setSyncCursor,
   updateDigestRunAccount
 } from './db.js';
 import { sendDiscordClassifierAlert, sendDiscordDigest, sendDiscordRealtime } from './discord.js';
@@ -103,12 +105,29 @@ async function processAccountUnreadMail(
   mailGateway: MailGateway,
   db: HedwigDb
 ): Promise<AccountProcessResult> {
-  return runAccountClassificationPass(config, accountConfig, mailGateway, db, PASSIVE_SIDE_EFFECTS, async () => (
-    mailGateway.listRecentInboxMessages(accountConfig, {
-      ...config.digest,
-      unreadOnly: true
-    })
-  ));
+  const startCursor = getSyncCursor(db, accountConfig.id);
+  let nextCursor: string | null = null;
+
+  const result = await runAccountClassificationPass(config, accountConfig, mailGateway, db, PASSIVE_SIDE_EFFECTS, async () => {
+    const sync = await mailGateway.syncInboxMessages(accountConfig, {
+      cursor: startCursor,
+      lookbackHours: config.digest.lookbackHours,
+      maxMessages: config.digest.maxMessages
+    });
+    nextCursor = sync.cursor;
+    if (sync.reset) {
+      console.info(`[${accountConfig.id}] history cursor ${startCursor ? 'expired' : 'absent'}; bootstrapped from recent inbox window`);
+    }
+    return sync.refs;
+  });
+
+  // Only advance the cursor once the batch processed cleanly. On failure we keep
+  // the old cursor so the next run re-syncs the same range; the DB dedup keeps
+  // already-handled messages from being processed twice.
+  if (!result.error && nextCursor) {
+    setSyncCursor(db, accountConfig.id, nextCursor);
+  }
+  return result;
 }
 
 async function backfillAccountUnreadMail(

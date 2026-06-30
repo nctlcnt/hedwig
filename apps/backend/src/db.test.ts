@@ -3,11 +3,13 @@ import {
   openDatabase,
   findProcessedGmailIds,
   getCachedEmailPreview,
+  getSyncCursor,
   listCleanupCandidates,
   recordTrashed,
   saveClassification,
   saveEmailBodyCache,
   saveMessage,
+  setSyncCursor,
   createDigestRun
 } from './db.js';
 import { ttlCutoffs } from './cleanup.js';
@@ -164,6 +166,14 @@ assert.deepEqual(
 assert.deepEqual(findProcessedGmailIds(cleanupDb, 'primary', []), new Set());
 // Dedup is scoped per account.
 assert.deepEqual(findProcessedGmailIds(cleanupDb, 'other', ['junk-old']), new Set());
+
+// Per-account incremental-sync cursor: absent, then upserted per account.
+assert.equal(getSyncCursor(cleanupDb, 'primary'), null);
+setSyncCursor(cleanupDb, 'primary', '12345');
+assert.equal(getSyncCursor(cleanupDb, 'primary'), '12345');
+setSyncCursor(cleanupDb, 'primary', '23456');
+assert.equal(getSyncCursor(cleanupDb, 'primary'), '23456');
+assert.equal(getSyncCursor(cleanupDb, 'other'), null);
 
 const cutoffs = ttlCutoffs(config.cleanup.ttlDays, new Date());
 const candidates = listCleanupCandidates(cleanupDb, 'primary', cutoffs, 200);

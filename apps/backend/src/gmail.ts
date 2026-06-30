@@ -70,6 +70,86 @@ export async function listUnreadInboxMessages(
   return response.data.messages || [];
 }
 
+export type InboxSyncResult = {
+  messages: gmail_v1.Schema$Message[];
+  cursor: string;
+  reset: boolean;
+};
+
+export async function getProfileHistoryId(gmail: GmailClient): Promise<string> {
+  const response = await gmail.users.getProfile({ userId: 'me' });
+  if (!response.data.historyId) {
+    throw new Error('Gmail profile did not return a historyId');
+  }
+  return String(response.data.historyId);
+}
+
+// Incremental inbox sync. With a cursor (a previously stored Gmail historyId) it
+// returns only messages added to the Inbox since that point, fully independent
+// of read/star/label state. Without a cursor — or when Gmail reports the cursor
+// has expired (404) — it bootstraps by capturing the current historyId and
+// scanning the recent window once. The historyId is captured before the window
+// scan so nothing added mid-scan is skipped next run; downstream dedup prevents
+// any reprocessing.
+export async function syncInboxMessages(
+  gmail: GmailClient,
+  { cursor, lookbackHours, maxMessages }: { cursor: string | null; lookbackHours: number; maxMessages: number }
+): Promise<InboxSyncResult> {
+  if (cursor) {
+    try {
+      return await historyInboxMessages(gmail, cursor, maxMessages);
+    } catch (error) {
+      if (!isHistoryExpired(error)) throw error;
+      // Cursor too old for Gmail's history retention: fall through to bootstrap.
+    }
+  }
+
+  const freshCursor = await getProfileHistoryId(gmail);
+  const messages = await listRecentInboxMessages(gmail, { lookbackHours, maxMessages, unreadOnly: false });
+  return { messages, cursor: freshCursor, reset: true };
+}
+
+async function historyInboxMessages(
+  gmail: GmailClient,
+  startHistoryId: string,
+  maxMessages: number
+): Promise<InboxSyncResult> {
+  const byId = new Map<string, gmail_v1.Schema$Message>();
+  let latestHistoryId = startHistoryId;
+  let pageToken: string | undefined;
+
+  do {
+    const response = await gmail.users.history.list({
+      userId: 'me',
+      startHistoryId,
+      historyTypes: ['messageAdded'],
+      labelId: 'INBOX',
+      maxResults: 500,
+      pageToken
+    });
+    // history.list always returns the mailbox's current historyId, even with no
+    // new records, so advancing the cursor keeps it from going stale.
+    if (response.data.historyId) latestHistoryId = String(response.data.historyId);
+    for (const record of response.data.history || []) {
+      for (const added of record.messagesAdded || []) {
+        const message = added.message;
+        if (!message?.id) continue;
+        const labels = message.labelIds || [];
+        if (labels.includes('SPAM') || labels.includes('TRASH')) continue;
+        byId.set(message.id, { id: message.id, threadId: message.threadId });
+      }
+    }
+    pageToken = response.data.nextPageToken || undefined;
+  } while (pageToken && byId.size < maxMessages);
+
+  return { messages: [...byId.values()], cursor: latestHistoryId, reset: false };
+}
+
+function isHistoryExpired(error: unknown): boolean {
+  const candidate = error as { code?: number; status?: number; response?: { status?: number } };
+  return candidate?.code === 404 || candidate?.status === 404 || candidate?.response?.status === 404;
+}
+
 export async function getMessage(
   gmail: GmailClient,
   account: GmailAccountConfig,

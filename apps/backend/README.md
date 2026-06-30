@@ -4,7 +4,7 @@ Node service for multi-account Gmail digest, Gmail labels, Discord delivery, and
 
 Hedwig's mail flow depends on the internal `MailGateway` boundary instead of importing Gmail API helpers directly. The current gateway implementation is still Gmail-backed and uses the same OAuth/config/token files, but the product layer now treats personal mail access as a replaceable adapter.
 
-Unread inbox mail is the processing queue. Each run classifies unread messages and persists the handling result in SQLite. Which messages have already been handled is tracked in SQLite (`message_classifications`), not by the Gmail read flag, so processed mail can be left unread/in-inbox without being reprocessed. Scheduled digests read today's stored handling results from SQLite rather than doing a fresh inbox classification pass.
+New inbox mail is discovered through the Gmail History API: a per-account `historyId` cursor is stored in SQLite (`sync_state`) and each run pulls only the messages added since that cursor, independent of read/star/label state. The first run (or an expired cursor) bootstraps from the recent `GMAIL_LOOKBACK_HOURS` window. Which messages have already been handled is tracked in SQLite (`message_classifications`), not by the Gmail read flag, so processed mail can be left unread/in-inbox without being reprocessed, and the cursor only advances after a run finishes cleanly. Scheduled digests read today's stored handling results from SQLite rather than doing a fresh inbox classification pass.
 
 Gmail state is intentionally minimal:
 
