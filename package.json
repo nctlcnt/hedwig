@@ -12,7 +12,7 @@
     "dry-run:preview": "tsx apps/backend/scripts/preview-dry-run.ts",
     "backfill:unread": "tsx apps/backend/scripts/backfill-unread.ts",
     "cleanup": "tsx apps/backend/scripts/cleanup.ts",
-    "test": "tsx apps/backend/src/db.test.ts && tsx apps/backend/src/classifier.test.ts",
+    "test": "tsx apps/backend/src/db.test.ts && tsx apps/backend/src/classifier.test.ts && tsx apps/backend/src/gmail.test.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {

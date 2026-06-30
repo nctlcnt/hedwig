@@ -97,7 +97,7 @@ export async function syncInboxMessages(
 ): Promise<InboxSyncResult> {
   if (cursor) {
     try {
-      return await historyInboxMessages(gmail, cursor, maxMessages);
+      return await historyInboxMessages(gmail, cursor);
     } catch (error) {
       if (!isHistoryExpired(error)) throw error;
       // Cursor too old for Gmail's history retention: fall through to bootstrap.
@@ -111,8 +111,7 @@ export async function syncInboxMessages(
 
 async function historyInboxMessages(
   gmail: GmailClient,
-  startHistoryId: string,
-  maxMessages: number
+  startHistoryId: string
 ): Promise<InboxSyncResult> {
   const byId = new Map<string, gmail_v1.Schema$Message>();
   let latestHistoryId = startHistoryId;
@@ -140,7 +139,7 @@ async function historyInboxMessages(
       }
     }
     pageToken = response.data.nextPageToken || undefined;
-  } while (pageToken && byId.size < maxMessages);
+  } while (pageToken);
 
   return { messages: [...byId.values()], cursor: latestHistoryId, reset: false };
 }

@@ -184,6 +184,10 @@ async function runAccountClassificationPass(
         });
       }
 
+      saveMessage(db, account, email);
+      saveEmailBodyCache(db, email);
+      saveClassification(db, runId, email, classification, processedAs);
+
       // Junk (incl. one-time codes) always leaves the inbox; other categories
       // only when archive-everything is on. Starred mail always stays.
       const archive = !shouldKeepInInbox(email)
@@ -195,9 +199,6 @@ async function runAccountClassificationPass(
         await sendDiscordRealtime(config, digestItem(accountConfig, account, email, classification, processedAs));
       }
 
-      saveMessage(db, account, email);
-      saveEmailBodyCache(db, email);
-      saveClassification(db, runId, email, classification, processedAs);
       if (sideEffects.markRead) {
         await mailGateway.markMessagesRead(accountConfig, [email.id]);
       }
