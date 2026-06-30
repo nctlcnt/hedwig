@@ -65,7 +65,9 @@ export function loadConfig(): AppConfig {
         model: process.env.CLASSIFIER_MODEL || process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro',
         providerName: process.env.CLASSIFIER_PROVIDER_NAME || (rawProvider === 'deepseek' ? 'deepseek' : 'openai-compatible')
       },
-      fallbackLlm: fallbackLlmConfig()
+      fallbackLlm: fallbackLlmConfig(),
+      maxRetries: integer('CLASSIFIER_MAX_RETRIES', 4),
+      requestTimeoutMs: integer('CLASSIFIER_TIMEOUT_MS', 60000)
     },
     cleanup: cleanupConfig(),
     database: {

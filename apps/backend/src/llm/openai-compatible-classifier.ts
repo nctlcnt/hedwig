@@ -22,9 +22,13 @@ export function createOpenAICompatibleClassifier(config: AppConfig): EmailClassi
   }
 
   const systemPrompt = buildSystemPrompt(config.classifier.rulesPath);
-  const primary = createSingleLlmClassifier(config.classifier.llm, systemPrompt);
+  const clientOptions = {
+    maxRetries: config.classifier.maxRetries,
+    timeout: config.classifier.requestTimeoutMs
+  };
+  const primary = createSingleLlmClassifier(config.classifier.llm, systemPrompt, clientOptions);
   const fallback = config.classifier.fallbackLlm
-    ? createSingleLlmClassifier(config.classifier.fallbackLlm, systemPrompt)
+    ? createSingleLlmClassifier(config.classifier.fallbackLlm, systemPrompt, clientOptions)
     : null;
 
   return {
@@ -58,8 +62,19 @@ export function createOpenAICompatibleClassifier(config: AppConfig): EmailClassi
   };
 }
 
-function createSingleLlmClassifier(llm: LlmClassifierConfig, systemPrompt: string): EmailClassifier {
-  const client = new OpenAI({ baseURL: llm.baseUrl, apiKey: llm.apiKey });
+function createSingleLlmClassifier(
+  llm: LlmClassifierConfig,
+  systemPrompt: string,
+  clientOptions: { maxRetries: number; timeout: number }
+): EmailClassifier {
+  // maxRetries/timeout drive the SDK's exponential backoff with jitter, which
+  // honors Retry-After on 429s and also retries timeouts/5xx/connection errors.
+  const client = new OpenAI({
+    baseURL: llm.baseUrl,
+    apiKey: llm.apiKey,
+    maxRetries: clientOptions.maxRetries,
+    timeout: clientOptions.timeout
+  });
 
   return {
     async classify(email: EmailMessage) {

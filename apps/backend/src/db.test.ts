@@ -43,7 +43,9 @@ const config: AppConfig = {
       baseUrl: '',
       model: '',
       providerName: ''
-    }
+    },
+    maxRetries: 4,
+    requestTimeoutMs: 60000
   },
   cleanup: {
     ttlDays: { junk: 0, fyi: 14, admin: 30 },

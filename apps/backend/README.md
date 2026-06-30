@@ -16,7 +16,7 @@ Gmail state is intentionally minimal:
 Current providers:
 
 - `rule`: local conservative rules
-- `openai-compatible`: JSON-mode classification against any OpenAI-compatible endpoint (DeepSeek, GLM, …). On failure it tries the optional backup LLM (`CLASSIFIER_FALLBACK_*`) before falling back to the rule classifier, and Hedwig posts a Discord alert listing any messages that fell back.
+- `openai-compatible`: JSON-mode classification against any OpenAI-compatible endpoint (DeepSeek, GLM, …). Each call retries with exponential backoff (`CLASSIFIER_MAX_RETRIES`, `CLASSIFIER_TIMEOUT_MS`), which honors `Retry-After` so a 429 rate limit self-throttles rather than failing. Only once retries are exhausted does it try the optional backup LLM (`CLASSIFIER_FALLBACK_*`), then the rule classifier, and Hedwig posts a Discord alert listing any messages that fell back.
 
 Run from the repo root:
 

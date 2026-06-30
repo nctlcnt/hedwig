@@ -30,6 +30,11 @@ export type AppConfig = {
     // Optional secondary LLM tried when the primary one fails (rate limit,
     // outage, insufficient balance) before giving up to the rule classifier.
     fallbackLlm?: LlmClassifierConfig;
+    // Per-request resilience for the LLM calls. maxRetries drives the SDK's
+    // exponential backoff (which honors Retry-After), so a 429 rate limit
+    // self-throttles instead of immediately dropping to the fallback chain.
+    maxRetries: number;
+    requestTimeoutMs: number;
   };
   cleanup: CleanupConfig;
   database: {
