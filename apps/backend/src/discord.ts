@@ -180,7 +180,7 @@ function summaryEmbed(digest: DigestReport) {
     title: `[Daily Digest] ${digest.date} — 共 ${digest.total} 封`,
     description: limitDescription(summaryBody(digest)),
     color: pickColor(digest),
-    footer: { text: 'Hedwig email digest · 明细见下方 thread' },
+    footer: { text: digest.total > 0 ? 'Hedwig email digest · 明细见下方 thread' : 'Hedwig email digest' },
     timestamp: new Date().toISOString()
   };
 }
