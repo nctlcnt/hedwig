@@ -9,9 +9,8 @@ This repo now contains the first runnable Hedwig slice:
 - reads one or more configured Gmail account inboxes for the past 24 hours
 - discovers new inbox mail via the Gmail History API with a per-account `historyId` cursor, independent of read/star/label state
 - excludes Spam and Trash
-- creates only the allowed Gmail labels: `AUTO/action`, `AUTO/fyi`, `AUTO/course`, `AUTO/admin`, `AUTO/junk`, `AUTO/digest`
 - classifies each message conservatively, with Junk requiring unsubscribe or marketing evidence
-- applies one `AUTO/*` label to each message
+- records the classification in local SQLite and reports it in the digest, rather than writing category labels back to Gmail
 - sends the digest to Discord through the Hedwig bot instead of emailing it back to Gmail
 - leaves processed mail unread and in the Inbox to triage by hand (which messages were handled is tracked in SQLite, not the read flag); only junk and disposable one-time codes are removed from the Inbox
 - never replies, sends, permanently deletes, or touches Drive (the opt-in `cleanup` command moves expired processed mail to Trash, recoverable for 30 days)
@@ -82,8 +81,6 @@ CLASSIFIER_MODEL=glm-4.7
 CLASSIFIER_PROVIDER_NAME=glm
 ```
 
-The daily digest posts a glanceable summary message to `DISCORD_DIGEST_CHANNEL_ID` (counts plus a one-line lead per section), then opens a thread off that message and posts the per-section detail inside it. Splitting the detail across thread messages — chunked at 25 buttons / 4000 characters each — lets a busy day list every email without the single-message truncation or the 25-button ceiling.
-
 The daily digest posts a glanceable summary message to `DISCORD_DIGEST_CHANNEL_ID` (counts plus a one-line lead per section), then opens a thread off that message and posts the per-section detail inside it. Splitting the detail across thread messages — chunked at 25 buttons / ~3800 characters each (kept under Discord’s embed description limit) — lets a busy day list every email without the single-message truncation or the 25-button ceiling.
 
 In daemon mode, Hedwig also logs in to Discord Gateway with `DISCORD_BOT_TOKEN` to handle digest/realtime buttons. Digest entries include `查看内容` buttons; clicking one returns an ephemeral preview from Hedwig's local SQLite body cache: classifier summary, rough body text, important links, and a fallback Gmail link. Cached bodies are retained for 7 days and expired rows are deleted automatically.
@@ -94,7 +91,7 @@ Required Gmail OAuth scope:
 https://www.googleapis.com/auth/gmail.modify
 ```
 
-`gmail.modify` is needed because Hedwig creates and applies labels, marks digested messages as read, and — only through the opt-in `cleanup` command — moves expired processed mail to Gmail Trash (recoverable for 30 days). The code does not call reply, send, permanent-delete, or Drive APIs.
+`gmail.modify` is needed because Hedwig removes junk (including one-time codes) from the Inbox by dropping the `INBOX` label, marks backlog mail read during the opt-in `backfill:unread` run, and — only through the opt-in `cleanup` command — moves expired processed mail to Gmail Trash (recoverable for 30 days). Routine digest processing leaves mail unread and in the Inbox. The code does not call reply, send, permanent-delete, or Drive APIs.
 
 To get a Gmail refresh token, first fill these values in `.env`:
 
