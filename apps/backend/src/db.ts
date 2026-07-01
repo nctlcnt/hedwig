@@ -137,25 +137,29 @@ export function saveClassification(
   );
 }
 
-// Dedup gate for operational alerts. Returns true (and claims the slot by
-// stamping now) only if this signature has not fired within cooldownMs;
-// otherwise returns false and leaves the existing timestamp untouched, so the
-// cooldown counts from the last alert actually sent rather than each suppressed
-// attempt.
-export function shouldSendAlert(db: HedwigDb, signature: string, cooldownMs: number, now: Date = new Date()): boolean {
-  const key = signature.slice(0, 300);
+function alertKey(signature: string): string {
+  return signature.slice(0, 300);
+}
+
+// Read-only dedup check for operational alerts: true when this signature already
+// fired within cooldownMs and should stay suppressed. It does NOT claim the slot
+// — the caller records the send via recordAlertSent only after it succeeds, so a
+// failed Discord post doesn't silence the alert for the whole window.
+export function isAlertOnCooldown(db: HedwigDb, signature: string, cooldownMs: number, now: Date = new Date()): boolean {
   const row = db.prepare(`
     select last_sent_at as lastSentAt from alert_log where signature = ?
-  `).get(key) as { lastSentAt: string } | undefined;
-  if (row && now.getTime() - new Date(row.lastSentAt).getTime() < cooldownMs) {
-    return false;
-  }
+  `).get(alertKey(signature)) as { lastSentAt: string } | undefined;
+  return Boolean(row && now.getTime() - new Date(row.lastSentAt).getTime() < cooldownMs);
+}
+
+// Stamps the last-sent time for a signature, starting a fresh cooldown window.
+// Call this only after the alert was actually delivered.
+export function recordAlertSent(db: HedwigDb, signature: string, now: Date = new Date()): void {
   db.prepare(`
     insert into alert_log (signature, last_sent_at)
     values (?, ?)
     on conflict(signature) do update set last_sent_at = excluded.last_sent_at
-  `).run(key, now.toISOString());
-  return true;
+  `).run(alertKey(signature), now.toISOString());
 }
 
 // The per-account incremental-sync cursor (a Gmail historyId). This is how

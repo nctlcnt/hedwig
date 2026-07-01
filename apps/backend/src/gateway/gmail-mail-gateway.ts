@@ -1,7 +1,7 @@
 import {
   createGmailClient,
-  ensureFollowupLabel,
   getCurrentUser,
+  getFollowupLabelId,
   getMessage,
   getMessageLabels,
   listRecentInboxMessages,
@@ -37,8 +37,8 @@ class GmailMailGateway implements MailGateway {
     return getCurrentUser(this.clientFor(account));
   }
 
-  async ensureFollowupLabel(account: MailAccount): Promise<string> {
-    return ensureFollowupLabel(this.clientFor(account));
+  async getFollowupLabelId(account: MailAccount): Promise<string | null> {
+    return getFollowupLabelId(this.clientFor(account));
   }
 
   async listRecentInboxMessages(account: MailAccount, options: MailListOptions): Promise<MailMessageRef[]> {
