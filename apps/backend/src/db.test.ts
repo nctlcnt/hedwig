@@ -10,7 +10,8 @@ import {
   saveEmailBodyCache,
   saveMessage,
   setSyncCursor,
-  shouldSendAlert,
+  isAlertOnCooldown,
+  recordAlertSent,
   createDigestRun
 } from './db.js';
 import { ttlCutoffs } from './cleanup.js';
@@ -180,14 +181,26 @@ setSyncCursor(cleanupDb, 'primary', '23456');
 assert.equal(getSyncCursor(cleanupDb, 'primary'), '23456');
 assert.equal(getSyncCursor(cleanupDb, 'other'), null);
 
-// Alert dedup gate: first fire sends, repeats within cooldown are suppressed,
-// a different signature still fires, and the cooldown counts from the last sent.
+// Alert dedup gate: read-only cooldown check plus a record-on-success stamp.
+// A signature is only suppressed after a send is actually recorded, repeats
+// within the window stay suppressed, a different signature is independent, and
+// the cooldown counts from the last recorded send.
 const hour = 60 * 60 * 1000;
 const t0 = new Date('2026-01-01T00:00:00Z');
-assert.equal(shouldSendAlert(cleanupDb, 'sig-a', hour, t0), true);
-assert.equal(shouldSendAlert(cleanupDb, 'sig-a', hour, new Date(t0.getTime() + 30 * 60 * 1000)), false);
-assert.equal(shouldSendAlert(cleanupDb, 'sig-b', hour, new Date(t0.getTime() + 30 * 60 * 1000)), true);
-assert.equal(shouldSendAlert(cleanupDb, 'sig-a', hour, new Date(t0.getTime() + 61 * 60 * 1000)), true);
+// Nothing recorded yet: not on cooldown. Simulate a successful send by recording.
+assert.equal(isAlertOnCooldown(cleanupDb, 'sig-a', hour, t0), false);
+recordAlertSent(cleanupDb, 'sig-a', t0);
+// Same signature 30 min later: still cooling down.
+assert.equal(isAlertOnCooldown(cleanupDb, 'sig-a', hour, new Date(t0.getTime() + 30 * 60 * 1000)), true);
+// A different signature is independent.
+assert.equal(isAlertOnCooldown(cleanupDb, 'sig-b', hour, new Date(t0.getTime() + 30 * 60 * 1000)), false);
+// Past the window (measured from the recorded send): free to fire again.
+assert.equal(isAlertOnCooldown(cleanupDb, 'sig-a', hour, new Date(t0.getTime() + 61 * 60 * 1000)), false);
+
+// A failed send (no recordAlertSent) must not silence the alert: the check
+// keeps returning "not on cooldown" until a send is actually recorded.
+assert.equal(isAlertOnCooldown(cleanupDb, 'sig-fail', hour, t0), false);
+assert.equal(isAlertOnCooldown(cleanupDb, 'sig-fail', hour, new Date(t0.getTime() + 60 * 1000)), false);
 
 const cutoffs = ttlCutoffs(config.cleanup.ttlDays, new Date());
 const candidates = listCleanupCandidates(cleanupDb, 'primary', cutoffs, 200);

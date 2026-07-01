@@ -48,7 +48,9 @@ async function cleanupAccount(
 
   try {
     accountEmail = await mailGateway.getCurrentUser(account);
-    const followupLabelId = await mailGateway.ensureFollowupLabel(account);
+    // Read-only lookup so a dry-run never mutates Gmail. Null when the label
+    // doesn't exist yet, in which case no message can carry it anyway.
+    const followupLabelId = await mailGateway.getFollowupLabelId(account);
     const cutoffs = ttlCutoffs(config.cleanup.ttlDays, new Date());
     const candidates = listCleanupCandidates(db, account.id, cutoffs, config.cleanup.maxPerAccount);
 

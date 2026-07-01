@@ -35,7 +35,7 @@ export type MailSyncResult = {
 export type MailGateway = {
   listAccounts(): MailAccount[];
   getCurrentUser(account: MailAccount): Promise<string>;
-  ensureFollowupLabel(account: MailAccount): Promise<string>;
+  getFollowupLabelId(account: MailAccount): Promise<string | null>;
   listRecentInboxMessages(account: MailAccount, options: MailListOptions): Promise<MailMessageRef[]>;
   listUnreadInboxMessages(account: MailAccount, options: { limit: number }): Promise<MailMessageRef[]>;
   syncInboxMessages(account: MailAccount, options: MailSyncOptions): Promise<MailSyncResult>;

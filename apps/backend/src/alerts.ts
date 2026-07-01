@@ -1,4 +1,4 @@
-import { shouldSendAlert } from './db.js';
+import { isAlertOnCooldown, recordAlertSent } from './db.js';
 import { sendDiscordDebug } from './discord.js';
 import type { HedwigDb } from './db.js';
 import type { AppConfig } from './types.js';
@@ -18,8 +18,11 @@ export type Problem = {
 export async function reportProblem(config: AppConfig, db: HedwigDb, problem: Problem): Promise<void> {
   try {
     if (!config.discord.debugChannelId) return;
-    if (!shouldSendAlert(db, problem.signature, config.discord.debugCooldownMs)) return;
+    if (isAlertOnCooldown(db, problem.signature, config.discord.debugCooldownMs)) return;
     await sendDiscordDebug(config, problem.title, problem.detail);
+    // Start the cooldown only after a successful send, so a failed post retries
+    // next run instead of being silenced for the whole window.
+    recordAlertSent(db, problem.signature);
   } catch (error) {
     console.error('Failed to report problem to debug channel', error);
   }

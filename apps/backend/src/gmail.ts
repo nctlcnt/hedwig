@@ -20,26 +20,14 @@ export async function getCurrentUser(gmail: GmailClient): Promise<string> {
   return response.data.emailAddress || 'me';
 }
 
-export async function ensureFollowupLabel(gmail: GmailClient): Promise<string> {
+// Read-only lookup of the Hedwig/Followup label id, or null when the label does
+// not exist yet. Callers that only need to detect the label (e.g. cleanup) must
+// not create it as a side effect; the label is created lazily by whatever flow
+// actually assigns follow-up. A null id simply matches no message.
+export async function getFollowupLabelId(gmail: GmailClient): Promise<string | null> {
   const existing = await gmail.users.labels.list({ userId: 'me' });
-  const byName = new Map((existing.data.labels || []).map((label) => [label.name, label]));
-  const current = byName.get(FOLLOWUP_LABEL);
-  if (current?.id) {
-    return current.id;
-  }
-
-  const created = await gmail.users.labels.create({
-    userId: 'me',
-    requestBody: {
-      name: FOLLOWUP_LABEL,
-      labelListVisibility: 'labelShow',
-      messageListVisibility: 'show'
-    }
-  });
-  if (!created.data.id) {
-    throw new Error(`Gmail did not return an id for created label: ${FOLLOWUP_LABEL}`);
-  }
-  return created.data.id;
+  const current = (existing.data.labels || []).find((label) => label.name === FOLLOWUP_LABEL);
+  return current?.id ?? null;
 }
 
 export async function listRecentInboxMessages(
