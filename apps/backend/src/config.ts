@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { existsSync, readFileSync } from 'node:fs';
-import type { AppConfig, GmailAccountConfig } from './types.js';
+import type { AppConfig, Category, CleanupConfig, GmailAccountConfig, LlmClassifierConfig } from './types.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -29,9 +29,11 @@ function boolean(name: string, fallback: boolean): boolean {
 }
 
 export function loadConfig(): AppConfig {
-  const rawProvider = process.env.CLASSIFIER_PROVIDER || (process.env.DEEPSEEK_API_KEY ? 'deepseek' : 'rule');
-  if (rawProvider !== 'rule' && rawProvider !== 'deepseek') {
-    throw new Error(`CLASSIFIER_PROVIDER must be "rule" or "deepseek", got: ${rawProvider}`);
+  const rawProvider = process.env.CLASSIFIER_PROVIDER
+    || (process.env.CLASSIFIER_API_KEY || process.env.DEEPSEEK_API_KEY ? 'openai-compatible' : 'rule');
+  const provider = rawProvider === 'deepseek' ? 'openai-compatible' : rawProvider;
+  if (provider !== 'rule' && provider !== 'openai-compatible') {
+    throw new Error(`CLASSIFIER_PROVIDER must be "rule", "openai-compatible", or legacy "deepseek", got: ${rawProvider}`);
   }
 
   return {
@@ -44,7 +46,9 @@ export function loadConfig(): AppConfig {
     discord: {
       botToken: required('DISCORD_BOT_TOKEN'),
       digestChannelId: required('DISCORD_DIGEST_CHANNEL_ID'),
-      realtimeChannelId: process.env.DISCORD_REALTIME_CHANNEL_ID || ''
+      realtimeChannelId: process.env.DISCORD_REALTIME_CHANNEL_ID || '',
+      debugChannelId: process.env.DISCORD_DEBUG_CHANNEL_ID || '',
+      debugCooldownMs: integer('DISCORD_DEBUG_COOLDOWN_MINUTES', 60) * 60 * 1000
     },
     digest: {
       timezone: process.env.DIGEST_TIMEZONE || 'Australia/Sydney',
@@ -55,16 +59,75 @@ export function loadConfig(): AppConfig {
       unreadOnly: boolean('GMAIL_UNREAD_ONLY', true)
     },
     classifier: {
-      provider: rawProvider,
-      deepseek: {
-        apiKey: process.env.DEEPSEEK_API_KEY || '',
-        model: process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro'
-      }
+      provider,
+      rulesPath: process.env.CLASSIFIER_RULES_FILE || 'config/classifier-rules.md',
+      llm: {
+        apiKey: process.env.CLASSIFIER_API_KEY || process.env.DEEPSEEK_API_KEY || '',
+        baseUrl: process.env.CLASSIFIER_API_BASE_URL || 'https://api.deepseek.com',
+        model: process.env.CLASSIFIER_MODEL || process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro',
+        providerName: process.env.CLASSIFIER_PROVIDER_NAME || (rawProvider === 'deepseek' ? 'deepseek' : 'openai-compatible')
+      },
+      fallbackLlm: fallbackLlmConfig(),
+      maxRetries: integer('CLASSIFIER_MAX_RETRIES', 4),
+      requestTimeoutMs: integer('CLASSIFIER_TIMEOUT_MS', 60000)
     },
+    cleanup: cleanupConfig(),
     database: {
       path: process.env.SQLITE_PATH || 'data/hedwig.db'
     }
   };
+}
+
+function fallbackLlmConfig(): LlmClassifierConfig | undefined {
+  // Secondary LLM used only when the primary classifier call fails. Activated by
+  // setting CLASSIFIER_FALLBACK_API_KEY; otherwise we go straight to the rule
+  // classifier on failure. Each field independently falls back to the primary
+  // value so a backup that shares the same key/base only needs to override what
+  // differs (usually just the model).
+  const apiKey = process.env.CLASSIFIER_FALLBACK_API_KEY;
+  if (!apiKey) return undefined;
+  return {
+    apiKey,
+    baseUrl: process.env.CLASSIFIER_FALLBACK_API_BASE_URL || process.env.CLASSIFIER_API_BASE_URL || 'https://api.deepseek.com',
+    model: process.env.CLASSIFIER_FALLBACK_MODEL || process.env.CLASSIFIER_MODEL || 'deepseek-v4-pro',
+    providerName: process.env.CLASSIFIER_FALLBACK_PROVIDER_NAME || 'fallback'
+  };
+}
+
+function cleanupConfig(): CleanupConfig {
+  // Defaults: junk is disposable as soon as it is processed; fyi/admin are kept
+  // for a grace window; course/action are never auto-trashed. Set any
+  // CLEANUP_TTL_*_DAYS to "never" (or omit it) to keep that category forever.
+  const defaults: Array<[Category, number | null]> = [
+    ['junk', 0],
+    ['fyi', 14],
+    ['admin', 30],
+    ['course', null],
+    ['action', null]
+  ];
+
+  const ttlDays: Partial<Record<Category, number>> = {};
+  for (const [category, fallback] of defaults) {
+    const days = ttlDaysFor(`CLEANUP_TTL_${category.toUpperCase()}_DAYS`, fallback);
+    if (days !== null) ttlDays[category] = days;
+  }
+
+  return {
+    ttlDays,
+    maxPerAccount: integer('CLEANUP_MAX_PER_ACCOUNT', 200)
+  };
+}
+
+function ttlDaysFor(name: string, fallback: number | null): number | null {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === '' || trimmed === 'never' || trimmed === 'off') return null;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer or "never"`);
+  }
+  return parsed;
 }
 
 function gmailAccounts(): GmailAccountConfig[] {

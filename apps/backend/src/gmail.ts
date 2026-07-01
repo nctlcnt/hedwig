@@ -70,6 +70,85 @@ export async function listUnreadInboxMessages(
   return response.data.messages || [];
 }
 
+export type InboxSyncResult = {
+  messages: gmail_v1.Schema$Message[];
+  cursor: string;
+  reset: boolean;
+};
+
+export async function getProfileHistoryId(gmail: GmailClient): Promise<string> {
+  const response = await gmail.users.getProfile({ userId: 'me' });
+  if (!response.data.historyId) {
+    throw new Error('Gmail profile did not return a historyId');
+  }
+  return String(response.data.historyId);
+}
+
+// Incremental inbox sync. With a cursor (a previously stored Gmail historyId) it
+// returns only messages added to the Inbox since that point, fully independent
+// of read/star/label state. Without a cursor — or when Gmail reports the cursor
+// has expired (404) — it bootstraps by capturing the current historyId and
+// scanning the recent window once. The historyId is captured before the window
+// scan so nothing added mid-scan is skipped next run; downstream dedup prevents
+// any reprocessing.
+export async function syncInboxMessages(
+  gmail: GmailClient,
+  { cursor, lookbackHours, maxMessages }: { cursor: string | null; lookbackHours: number; maxMessages: number }
+): Promise<InboxSyncResult> {
+  if (cursor) {
+    try {
+      return await historyInboxMessages(gmail, cursor);
+    } catch (error) {
+      if (!isHistoryExpired(error)) throw error;
+      // Cursor too old for Gmail's history retention: fall through to bootstrap.
+    }
+  }
+
+  const freshCursor = await getProfileHistoryId(gmail);
+  const messages = await listRecentInboxMessages(gmail, { lookbackHours, maxMessages, unreadOnly: false });
+  return { messages, cursor: freshCursor, reset: true };
+}
+
+async function historyInboxMessages(
+  gmail: GmailClient,
+  startHistoryId: string
+): Promise<InboxSyncResult> {
+  const byId = new Map<string, gmail_v1.Schema$Message>();
+  let latestHistoryId = startHistoryId;
+  let pageToken: string | undefined;
+
+  do {
+    const response = await gmail.users.history.list({
+      userId: 'me',
+      startHistoryId,
+      historyTypes: ['messageAdded'],
+      labelId: 'INBOX',
+      maxResults: 500,
+      pageToken
+    });
+    // history.list always returns the mailbox's current historyId, even with no
+    // new records, so advancing the cursor keeps it from going stale.
+    if (response.data.historyId) latestHistoryId = String(response.data.historyId);
+    for (const record of response.data.history || []) {
+      for (const added of record.messagesAdded || []) {
+        const message = added.message;
+        if (!message?.id) continue;
+        const labels = message.labelIds || [];
+        if (labels.includes('SPAM') || labels.includes('TRASH')) continue;
+        byId.set(message.id, { id: message.id, threadId: message.threadId });
+      }
+    }
+    pageToken = response.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  return { messages: [...byId.values()], cursor: latestHistoryId, reset: false };
+}
+
+function isHistoryExpired(error: unknown): boolean {
+  const candidate = error as { code?: number; status?: number; response?: { status?: number } };
+  return candidate?.code === 404 || candidate?.status === 404 || candidate?.response?.status === 404;
+}
+
 export async function getMessage(
   gmail: GmailClient,
   account: GmailAccountConfig,
@@ -106,6 +185,38 @@ export async function removeFromInbox(gmail: GmailClient, messageIds: string[]):
       removeLabelIds: ['INBOX']
     }
   });
+}
+
+// Returns the current label ids for a message, or null if Gmail no longer has it
+// (already deleted out of band). Uses the minimal format to avoid downloading
+// the body during the cleanup pass.
+export async function getMessageLabels(gmail: GmailClient, id: string): Promise<string[] | null> {
+  try {
+    const response = await gmail.users.messages.get({
+      userId: 'me',
+      id,
+      format: 'minimal'
+    });
+    return response.data.labelIds || [];
+  } catch (error) {
+    if (isNotFoundError(error)) return null;
+    throw error;
+  }
+}
+
+export async function trashMessages(gmail: GmailClient, messageIds: string[]): Promise<void> {
+  // Gmail rejects adding the TRASH label through messages.modify, so each message
+  // must go through the dedicated trash endpoint. Trashed mail is recoverable
+  // from Gmail's Trash for 30 days.
+  for (const id of messageIds) {
+    await gmail.users.messages.trash({ userId: 'me', id });
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: unknown; status?: unknown; response?: { status?: unknown } };
+  return candidate.code === 404 || candidate.status === 404 || candidate.response?.status === 404;
 }
 
 function normalizeMessage(

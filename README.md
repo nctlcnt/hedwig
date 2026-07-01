@@ -7,14 +7,14 @@ tracking this stack in [邮件-digest-overview](https://linear.app/chachas/proje
 This repo now contains the first runnable Hedwig slice:
 
 - reads one or more configured Gmail account inboxes for the past 24 hours
-- ignores read messages by default (`GMAIL_UNREAD_ONLY=true`)
+- discovers new inbox mail via the Gmail History API with a per-account `historyId` cursor, independent of read/star/label state
 - excludes Spam and Trash
 - creates only the allowed Gmail labels: `AUTO/action`, `AUTO/fyi`, `AUTO/course`, `AUTO/admin`, `AUTO/junk`, `AUTO/digest`
 - classifies each message conservatively, with Junk requiring unsubscribe or marketing evidence
 - applies one `AUTO/*` label to each message
 - sends the digest to Discord through the Hedwig bot instead of emailing it back to Gmail
-- marks digested messages as read after the Discord digest is sent
-- never replies, archives, deletes, trashes, or touches Drive
+- leaves processed mail unread and in the Inbox to triage by hand (which messages were handled is tracked in SQLite, not the read flag); only junk and disposable one-time codes are removed from the Inbox
+- never replies, sends, permanently deletes, or touches Drive (the opt-in `cleanup` command moves expired processed mail to Trash, recoverable for 30 days)
 
 ## repo layout
 
@@ -44,16 +44,45 @@ cp .env.example .env
 npm install
 ```
 
-Fill `.env` with Gmail OAuth client refresh token values, the Hedwig Discord bot token/channel, and optionally DeepSeek:
+Fill `.env` with Gmail OAuth client refresh token values, the Hedwig Discord bot token/channel, and optionally an OpenAI-compatible classifier API:
 
 ```text
-CLASSIFIER_PROVIDER=deepseek
-DEEPSEEK_API_KEY=
-DEEPSEEK_MODEL=deepseek-v4-pro
+CLASSIFIER_PROVIDER=openai-compatible
+CLASSIFIER_API_BASE_URL=https://api.deepseek.com
+CLASSIFIER_API_KEY=
+CLASSIFIER_MODEL=deepseek-v4-pro
+CLASSIFIER_PROVIDER_NAME=deepseek
 ```
 
-Use `CLASSIFIER_PROVIDER=rule` to run without DeepSeek.
-DeepSeek is called via the OpenAI-compatible endpoint at `https://api.deepseek.com`.
+Use `CLASSIFIER_PROVIDER=rule` to run without an LLM. Legacy `CLASSIFIER_PROVIDER=deepseek`,
+`DEEPSEEK_API_KEY`, and `DEEPSEEK_MODEL` are still accepted.
+
+#### personal classifier rules
+
+You can steer the LLM classifier with plain natural-language rules. Copy
+`config/classifier-rules.example.md` to `config/classifier-rules.md` (or point
+`CLASSIFIER_RULES_FILE` elsewhere) and write rules like “mail from my supervisor
+is always action” or “promotions@\* is junk”. The file is appended to the
+classifier prompt as the highest-priority instructions. Only the
+`openai-compatible` provider reads it; the `rule` provider ignores it.
+
+Note: the classifier keeps a guardrail (`hasJunkEvidence`) that downgrades a
+`junk` verdict to `fyi` unless the message also looks like bulk/marketing mail
+(unsubscribe header or promo language). So a rule that calls a non-marketing
+sender “junk” lands as `fyi`; it is still cleaned up, just on the longer `fyi`
+TTL rather than immediately.
+
+For GLM, set:
+
+```text
+CLASSIFIER_PROVIDER=openai-compatible
+CLASSIFIER_API_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+CLASSIFIER_API_KEY=...
+CLASSIFIER_MODEL=glm-4.7
+CLASSIFIER_PROVIDER_NAME=glm
+```
+
+The daily digest posts a glanceable summary message to `DISCORD_DIGEST_CHANNEL_ID` (counts plus a one-line lead per section), then opens a thread off that message and posts the per-section detail inside it. Splitting the detail across thread messages — chunked at 25 buttons / 4000 characters each — lets a busy day list every email without the single-message truncation or the 25-button ceiling.
 
 The daily digest posts a glanceable summary message to `DISCORD_DIGEST_CHANNEL_ID` (counts plus a one-line lead per section), then opens a thread off that message and posts the per-section detail inside it. Splitting the detail across thread messages — chunked at 25 buttons / ~3800 characters each (kept under Discord’s embed description limit) — lets a busy day list every email without the single-message truncation or the 25-button ceiling.
 
@@ -65,7 +94,7 @@ Required Gmail OAuth scope:
 https://www.googleapis.com/auth/gmail.modify
 ```
 
-`gmail.modify` is needed because Hedwig creates and applies labels, then marks digested messages as read. The code does not call reply, send, archive, delete, trash, or Drive APIs.
+`gmail.modify` is needed because Hedwig creates and applies labels, marks digested messages as read, and — only through the opt-in `cleanup` command — moves expired processed mail to Gmail Trash (recoverable for 30 days). The code does not call reply, send, permanent-delete, or Drive APIs.
 
 To get a Gmail refresh token, first fill these values in `.env`:
 
@@ -140,9 +169,7 @@ DIGEST_TIMEZONE=Australia/Sydney
 DIGEST_CRON=0 19 * * *
 ```
 
-By default Hedwig only scans unread inbox messages. Set `GMAIL_UNREAD_ONLY=false` only for backfills or debugging.
-
-The cron path (`digest:daemon` and `digest:once`) only considers unread mail inside the `GMAIL_LOOKBACK_HOURS` window. Older unread mail is left alone — drain it explicitly with `backfill:unread`.
+The cron path (`digest:daemon` and `digest:once`) discovers new inbox mail through the Gmail History API, using a per-account `historyId` cursor stored in SQLite (`sync_state`). Discovery is therefore independent of Gmail's read/star/label state — reading a message yourself no longer hides it from Hedwig. The first run (or a cursor that has aged out of Gmail's history retention) bootstraps by scanning the recent `GMAIL_LOOKBACK_HOURS` window once and capturing the current cursor; from then on each run only pulls messages added since the cursor. SQLite (`message_classifications`) remains the idempotency guard, so nothing is processed twice. `GMAIL_UNREAD_ONLY` no longer affects the daemon.
 
 ### backfill older unread mail
 
@@ -151,12 +178,41 @@ npm run backfill:unread        # 30 most-recent unread per account
 npm run backfill:unread 1      # smoke test: 1 message per account
 ```
 
-`backfill:unread` ignores `GMAIL_LOOKBACK_HOURS` and reuses the same pipeline as the daemon (classify, Discord push, SQLite, mark read, Inbox cleanup). Run `backfill:unread 1` after changing the classifier provider or model to verify the DeepSeek end-to-end path against real Gmail with minimal side effects.
+`backfill:unread` drains an unread backlog that predates the cursor's reach. It reuses the same pipeline as the daemon (classify, Discord push, SQLite) but marks handled mail read so repeated runs page through the backlog. Run `backfill:unread 1` after changing the classifier provider, base URL, or model to verify the LLM end-to-end path against real Gmail with minimal side effects.
+
+### clean up expired processed mail
+
+When you have spare time, trash old processed mail that has aged out and never
+needed follow-up:
+
+```bash
+npm run cleanup                # DRY-RUN: print the messages that would be trashed
+npm run cleanup -- --apply     # move them to Gmail Trash (recoverable for 30 days)
+```
+
+`cleanup` only looks at mail Hedwig already processed (in SQLite). A message is
+eligible when its category is past that category's TTL:
+
+```text
+CLEANUP_TTL_JUNK_DAYS=0        # junk is disposable as soon as it is processed
+CLEANUP_TTL_FYI_DAYS=14
+CLEANUP_TTL_ADMIN_DAYS=30
+CLEANUP_TTL_COURSE_DAYS=never  # course is never auto-trashed (default)
+CLEANUP_TTL_ACTION_DAYS=never  # action is never auto-trashed (default)
+CLEANUP_MAX_PER_ACCOUNT=200    # cap candidates checked per account per run
+```
+
+Set any `CLEANUP_TTL_*_DAYS` to `never` (or omit it) to keep that category
+forever. Before trashing, `cleanup` re-checks each candidate's live Gmail state
+and **keeps** anything that is currently starred or carries the
+`Hedwig/Followup` label — that is how a message is marked “needs follow-up”.
+Trashed message ids are recorded in the `cleanup_log` table so later runs skip
+them. Dry-run is the default; nothing is deleted without `--apply`.
 
 ### probe scripts
 
 ```bash
-npm run probe:deepseek   # synthetic email through the DeepSeek classifier
+npm run probe:deepseek   # synthetic email through the configured LLM classifier
 npm run probe:unread     # per-account unread counts in/out of the lookback window
 ```
 

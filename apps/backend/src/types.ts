@@ -14,6 +14,10 @@ export type AppConfig = {
     botToken: string;
     digestChannelId: string;
     realtimeChannelId: string;
+    // Optional operational-error channel. Alerts here are deduped: the same
+    // problem signature is silenced for debugCooldownMs after it fires.
+    debugChannelId: string;
+    debugCooldownMs: number;
   };
   digest: {
     timezone: string;
@@ -24,15 +28,57 @@ export type AppConfig = {
     unreadOnly: boolean;
   };
   classifier: {
-    provider: 'rule' | 'deepseek';
-    deepseek: {
-      apiKey: string;
-      model: string;
-    };
+    provider: 'rule' | 'openai-compatible';
+    rulesPath: string;
+    llm: LlmClassifierConfig;
+    // Optional secondary LLM tried when the primary one fails (rate limit,
+    // outage, insufficient balance) before giving up to the rule classifier.
+    fallbackLlm?: LlmClassifierConfig;
+    // Per-request resilience for the LLM calls. maxRetries drives the SDK's
+    // exponential backoff (which honors Retry-After), so a 429 rate limit
+    // self-throttles instead of immediately dropping to the fallback chain.
+    maxRetries: number;
+    requestTimeoutMs: number;
   };
+  cleanup: CleanupConfig;
   database: {
     path: string;
   };
+};
+
+export type LlmClassifierConfig = {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  providerName: string;
+};
+
+export type ClassifierFailure = {
+  from: string;
+  subject: string;
+  gmailUrl: string;
+  reason: string;
+};
+
+export type CleanupConfig = {
+  // Per-category time-to-live in days. A category present here is eligible for
+  // trashing once it is older than the given number of days. Categories that
+  // are absent are never trashed (e.g. course, action by default).
+  ttlDays: Partial<Record<Category, number>>;
+  maxPerAccount: number;
+};
+
+export type CleanupCandidate = {
+  accountId: string;
+  gmailId: string;
+  threadId: string;
+  accountEmail: string;
+  from: string;
+  subject: string;
+  category: Category;
+  importance: number;
+  summary: string;
+  processedAt: string;
 };
 
 export type GmailAccountConfig = {
@@ -85,6 +131,7 @@ export type DigestItem = {
 
 export type EmailPreviewLink = {
   url: string;
+  label?: string;
 };
 
 export type CachedEmailPreview = {

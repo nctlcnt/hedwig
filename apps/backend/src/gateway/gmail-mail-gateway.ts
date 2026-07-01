@@ -3,13 +3,16 @@ import {
   ensureFollowupLabel,
   getCurrentUser,
   getMessage,
+  getMessageLabels,
   listRecentInboxMessages,
   listUnreadInboxMessages,
   markMessagesRead,
-  removeFromInbox
+  removeFromInbox,
+  syncInboxMessages,
+  trashMessages
 } from '../gmail.js';
 import type { AppConfig, EmailMessage, GmailAccountConfig, GmailClient } from '../types.js';
-import type { MailAccount, MailGateway, MailListOptions, MailMessageRef } from './mail-gateway.js';
+import type { MailAccount, MailGateway, MailListOptions, MailMessageRef, MailSyncOptions, MailSyncResult } from './mail-gateway.js';
 
 export function createGmailMailGateway(config: AppConfig): MailGateway {
   return new GmailMailGateway(config);
@@ -46,8 +49,17 @@ class GmailMailGateway implements MailGateway {
     return listUnreadInboxMessages(this.clientFor(account), options.limit);
   }
 
+  async syncInboxMessages(account: MailAccount, options: MailSyncOptions): Promise<MailSyncResult> {
+    const result = await syncInboxMessages(this.clientFor(account), options);
+    return { refs: result.messages, cursor: result.cursor, reset: result.reset };
+  }
+
   async getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage> {
     return getMessage(this.clientFor(account), this.configFor(account), accountEmail, id);
+  }
+
+  async getMessageLabels(account: MailAccount, id: string): Promise<string[] | null> {
+    return getMessageLabels(this.clientFor(account), id);
   }
 
   async markMessagesRead(account: MailAccount, messageIds: string[]): Promise<void> {
@@ -56,6 +68,10 @@ class GmailMailGateway implements MailGateway {
 
   async removeFromInbox(account: MailAccount, messageIds: string[]): Promise<void> {
     await removeFromInbox(this.clientFor(account), messageIds);
+  }
+
+  async trashMessages(account: MailAccount, messageIds: string[]): Promise<void> {
+    await trashMessages(this.clientFor(account), messageIds);
   }
 
   private clientFor(account: MailAccount): GmailClient {
