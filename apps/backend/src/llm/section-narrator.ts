@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import type { ChatCompletion } from 'openai/resources/chat/completions';
+import { summaryLanguageInstruction } from '../summary-language.js';
 import type { AppConfig, Category, DigestItem } from '../types.js';
 
 const REPORT_CATEGORIES: Category[] = ['action', 'fyi', 'course', 'admin'];
@@ -11,14 +12,15 @@ const CATEGORY_NAMES: Record<Category, string> = {
   junk: 'Junk 促销'
 };
 
-const SYSTEM_PROMPT = `你在汇总一份每日邮件日报。下面给出按类别分好的邮件清单（每条是「发件人：摘要」）。请为每个非空类别生成一句 12-25 字的中文总结，概括这批邮件的核心主题或行动点；语气像朋友汇报，不要点名发件人、不要列序号、不要重复类别名。空的类别返回空字符串。
+const SYSTEM_PROMPT = `你在汇总一份每日邮件日报。下面给出按类别分好的邮件清单（每条是「发件人：摘要」）。请为每个非空类别生成一句简短总结，概括这批邮件的核心主题或行动点；语气像朋友汇报，不要点名发件人、不要列序号、不要重复类别名。空的类别返回空字符串。
 
 返回 JSON，键固定为 action/fyi/course/admin：
 {"action": "...", "fyi": "...", "course": "...", "admin": "..."}`;
 
 export async function summarizeSections(
   config: AppConfig,
-  grouped: Record<Category, DigestItem[]>
+  grouped: Record<Category, DigestItem[]>,
+  summaryLanguage: string | null = null
 ): Promise<Record<Category, string>> {
   const empty = blankLeads();
   if (config.classifier.provider !== 'openai-compatible' || !config.classifier.llm.apiKey) {
@@ -37,7 +39,7 @@ export async function summarizeSections(
     const completion = (await client.chat.completions.create({
       model: config.classifier.llm.model,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: narratorSystemPrompt(summaryLanguage) },
         { role: 'user', content: userContent }
       ],
       response_format: { type: 'json_object' },
@@ -52,6 +54,13 @@ export async function summarizeSections(
     console.warn(`Section narrator failed; rendering without leads: ${error instanceof Error ? error.message : String(error)}`);
     return empty;
   }
+}
+
+function narratorSystemPrompt(summaryLanguage: string | null): string {
+  if (!summaryLanguage) {
+    return `${SYSTEM_PROMPT}\n\n所有非空总结使用中文。`;
+  }
+  return `${SYSTEM_PROMPT}\n\n${summaryLanguageInstruction(summaryLanguage, 'all JSON string values')}`;
 }
 
 function buildUserContent(grouped: Record<Category, DigestItem[]>): string {

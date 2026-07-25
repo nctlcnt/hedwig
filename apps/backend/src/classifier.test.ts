@@ -44,4 +44,22 @@ assert.equal(
   'fyi'
 );
 
+const structured = normalizeClassification(email({ subject: 'Assignment due Friday' }), {
+  category: 'action',
+  summary: 'The assignment is due Friday.',
+  attentionPoints: ['  Deadline: Friday  ', 'Deadline: Friday', 42 as unknown as string, 'A'.repeat(200)],
+  suggestedActions: ['Submit the assignment', '', 'Check the rubric', 'Ignored fourth action', 'Ask a question']
+}, 'glm');
+assert.deepEqual(structured.attentionPoints, ['Deadline: Friday', 'A'.repeat(160)]);
+assert.deepEqual(structured.suggestedActions, [
+  'Submit the assignment',
+  'Check the rubric',
+  'Ignored fourth action'
+]);
+assert.deepEqual(
+  normalizeClassification(email({ subject: 'FYI' }), { attentionPoints: 'invalid' as unknown as string[] }, 'glm')
+    .attentionPoints,
+  []
+);
+
 console.log('classifier.test.ts: all assertions passed');

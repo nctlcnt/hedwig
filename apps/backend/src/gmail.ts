@@ -3,8 +3,6 @@ import type { gmail_v1 } from 'googleapis';
 import { buildGmailMessageUrl } from './gmail-url.js';
 import type { AppConfig, EmailMessage, GmailAccountConfig, GmailClient } from './types.js';
 
-const FOLLOWUP_LABEL = 'Hedwig/Followup';
-
 export function createGmailClient(config: AppConfig, account: GmailAccountConfig): GmailClient {
   const auth = new google.auth.OAuth2(
     config.google.clientId,
@@ -20,39 +18,15 @@ export async function getCurrentUser(gmail: GmailClient): Promise<string> {
   return response.data.emailAddress || 'me';
 }
 
-// Read-only lookup of the Hedwig/Followup label id, or null when the label does
-// not exist yet. Callers that only need to detect the label (e.g. cleanup) must
-// not create it as a side effect; the label is created lazily by whatever flow
-// actually assigns follow-up. A null id simply matches no message.
-export async function getFollowupLabelId(gmail: GmailClient): Promise<string | null> {
-  const existing = await gmail.users.labels.list({ userId: 'me' });
-  const current = (existing.data.labels || []).find((label) => label.name === FOLLOWUP_LABEL);
-  return current?.id ?? null;
-}
-
 export async function listRecentInboxMessages(
   gmail: GmailClient,
-  { lookbackHours, maxMessages, unreadOnly }: Pick<AppConfig['digest'], 'lookbackHours' | 'maxMessages' | 'unreadOnly'>
+  { lookbackHours, maxMessages }: Pick<AppConfig['digest'], 'lookbackHours' | 'maxMessages'>
 ): Promise<gmail_v1.Schema$Message[]> {
   const afterSeconds = Math.floor((Date.now() - lookbackHours * 60 * 60 * 1000) / 1000);
-  const unreadQuery = unreadOnly ? ' is:unread' : '';
   const response = await gmail.users.messages.list({
     userId: 'me',
     maxResults: maxMessages,
-    q: `in:inbox${unreadQuery} -in:spam -in:trash after:${afterSeconds}`
-  });
-
-  return response.data.messages || [];
-}
-
-export async function listUnreadInboxMessages(
-  gmail: GmailClient,
-  limit: number
-): Promise<gmail_v1.Schema$Message[]> {
-  const response = await gmail.users.messages.list({
-    userId: 'me',
-    maxResults: limit,
-    q: 'in:inbox is:unread -in:spam -in:trash'
+    q: `in:inbox -in:spam -in:trash after:${afterSeconds}`
   });
 
   return response.data.messages || [];
@@ -93,7 +67,7 @@ export async function syncInboxMessages(
   }
 
   const freshCursor = await getProfileHistoryId(gmail);
-  const messages = await listRecentInboxMessages(gmail, { lookbackHours, maxMessages, unreadOnly: false });
+  const messages = await listRecentInboxMessages(gmail, { lookbackHours, maxMessages });
   return { messages, cursor: freshCursor, reset: true };
 }
 
@@ -149,62 +123,6 @@ export async function getMessage(
     format: 'full'
   });
   return normalizeMessage(response.data, account, accountEmail);
-}
-
-export async function markMessagesRead(gmail: GmailClient, messageIds: string[]): Promise<void> {
-  if (messageIds.length === 0) return;
-
-  await gmail.users.messages.batchModify({
-    userId: 'me',
-    requestBody: {
-      ids: messageIds,
-      removeLabelIds: ['UNREAD']
-    }
-  });
-}
-
-export async function removeFromInbox(gmail: GmailClient, messageIds: string[]): Promise<void> {
-  if (messageIds.length === 0) return;
-
-  await gmail.users.messages.batchModify({
-    userId: 'me',
-    requestBody: {
-      ids: messageIds,
-      removeLabelIds: ['INBOX']
-    }
-  });
-}
-
-// Returns the current label ids for a message, or null if Gmail no longer has it
-// (already deleted out of band). Uses the minimal format to avoid downloading
-// the body during the cleanup pass.
-export async function getMessageLabels(gmail: GmailClient, id: string): Promise<string[] | null> {
-  try {
-    const response = await gmail.users.messages.get({
-      userId: 'me',
-      id,
-      format: 'minimal'
-    });
-    return response.data.labelIds || [];
-  } catch (error) {
-    if (isNotFoundError(error)) return null;
-    throw error;
-  }
-}
-
-export async function trashMessages(gmail: GmailClient, messageIds: string[]): Promise<void> {
-  // Gmail rejects adding the TRASH label through messages.modify, so each message
-  // must go through the dedicated trash endpoint. Trashed mail is recoverable
-  // from Gmail's Trash for 30 days.
-  for (const id of messageIds) {
-    await gmail.users.messages.trash({ userId: 'me', id });
-  }
-}
-
-function isNotFoundError(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const candidate = error as { code?: unknown; status?: unknown; response?: { status?: unknown } };
-  return candidate.code === 404 || candidate.status === 404 || candidate.response?.status === 404;
 }
 
 function normalizeMessage(

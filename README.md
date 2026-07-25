@@ -1,221 +1,140 @@
-# hedwig
+# Hedwig
 
-tracking this stack in [邮件-digest-overview](https://linear.app/chachas/project/%E9%82%AE%E4%BB%B6-digest-11a75b83e5fb/overview)
+A personal Gmail digest and follow-up assistant for Discord.
 
-## first slice: Gmail daily digest -> Discord
+Hedwig reads new inbox mail, classifies it, stores workflow state in SQLite, and
+delivers realtime alerts and daily digests to Discord. Gmail access is
+read-only: mailbox state is never used as Hedwig's workflow state.
 
-This repo now contains the first runnable Hedwig slice:
+## Features
 
-- reads one or more configured Gmail account inboxes for the past 24 hours
-- discovers new inbox mail via the Gmail History API with a per-account `historyId` cursor, independent of read/star/label state
-- excludes Spam and Trash
-- classifies each message conservatively, with Junk requiring unsubscribe or marketing evidence
-- records the classification in local SQLite and reports it in the digest, rather than writing category labels back to Gmail
-- sends the digest to Discord through the Hedwig bot instead of emailing it back to Gmail
-- leaves processed mail unread and in the Inbox to triage by hand (which messages were handled is tracked in SQLite, not the read flag); only junk and disposable one-time codes are removed from the Inbox
-- never replies, sends, permanently deletes, or touches Drive (the opt-in `cleanup` command moves expired processed mail to Trash, recoverable for 30 days)
+- Multiple Gmail accounts with independent History API cursors
+- SQLite-backed deduplication, classifications, summaries, and sync state
+- Realtime Discord alerts for high-priority messages
+- Daily Discord digests with detailed threads
+- One-sentence summaries, attention points, and suggested actions
+- Ephemeral email previews with useful links and Gmail navigation
+- Seven-day local body cache with automatic expiry
+- Rule-based classification with optional OpenAI-compatible LLM support
+- Configurable summary language through `/summary-language`
+- Optional Discord Forum validation for the follow-up workflow
 
-## repo layout
+The Track, Done, and reconcile parts of the follow-up workflow are still under
+development.
+
+## Safety
+
+Hedwig uses the following Gmail OAuth scope:
 
 ```text
-apps/
-  backend/
-    prompts/              # LLM prompts
-    scripts/              # one-off auth/setup scripts
-    src/                  # digest, Discord, database, classifier providers
-      gateway/            # personal data access boundaries and adapters
-  frontend/
-    README.md             # reserved for a future admin UI
+https://www.googleapis.com/auth/gmail.readonly
 ```
 
-The current product surface is backend-only. `apps/frontend` exists so the repo shape is clear before adding UI.
+It reads inbox history, metadata, and message bodies. It does not mark messages
+read, star, label, archive, trash, reply, send, or permanently delete them.
+Suppressed junk and one-time codes remain unchanged in Gmail.
 
-## architecture boundary
+## Requirements
 
-Hedwig owns the email digest product workflow: classification, reporting, Discord delivery, and local SQLite run/message records. Direct personal data access sits behind gateway interfaces under `apps/backend/src/gateway/`.
+- Node.js 20 or newer
+- Google OAuth credentials with Gmail API access
+- A Discord bot and digest channel
 
-The current `MailGateway` implementation is Gmail-backed and still reuses this repo's OAuth, token, and Gmail API helpers. Digest code depends on the gateway interface, not Gmail API helpers directly, so a future `personal-gateway` service can replace the adapter without rewriting digest, classifier, Discord, or database logic.
-
-### setup
+## Quick start
 
 ```bash
 cp .env.example .env
 npm install
 ```
 
-Fill `.env` with Gmail OAuth client refresh token values, the Hedwig Discord bot token/channel, and optionally an OpenAI-compatible classifier API:
-
-```text
-CLASSIFIER_PROVIDER=openai-compatible
-CLASSIFIER_API_BASE_URL=https://api.deepseek.com
-CLASSIFIER_API_KEY=
-CLASSIFIER_MODEL=deepseek-v4-pro
-CLASSIFIER_PROVIDER_NAME=deepseek
-```
-
-Use `CLASSIFIER_PROVIDER=rule` to run without an LLM. Legacy `CLASSIFIER_PROVIDER=deepseek`,
-`DEEPSEEK_API_KEY`, and `DEEPSEEK_MODEL` are still accepted.
-
-#### personal classifier rules
-
-You can steer the LLM classifier with plain natural-language rules. Copy
-`config/classifier-rules.example.md` to `config/classifier-rules.md` (or point
-`CLASSIFIER_RULES_FILE` elsewhere) and write rules like “mail from my supervisor
-is always action” or “promotions@\* is junk”. The file is appended to the
-classifier prompt as the highest-priority instructions. Only the
-`openai-compatible` provider reads it; the `rule` provider ignores it.
-
-Note: the classifier keeps a guardrail (`hasJunkEvidence`) that downgrades a
-`junk` verdict to `fyi` unless the message also looks like bulk/marketing mail
-(unsubscribe header or promo language). So a rule that calls a non-marketing
-sender “junk” lands as `fyi`; it is still cleaned up, just on the longer `fyi`
-TTL rather than immediately.
-
-For GLM, set:
-
-```text
-CLASSIFIER_PROVIDER=openai-compatible
-CLASSIFIER_API_BASE_URL=https://open.bigmodel.cn/api/paas/v4
-CLASSIFIER_API_KEY=...
-CLASSIFIER_MODEL=glm-4.7
-CLASSIFIER_PROVIDER_NAME=glm
-```
-
-The daily digest posts a glanceable summary message to `DISCORD_DIGEST_CHANNEL_ID` (counts plus a one-line lead per section), then opens a thread off that message and posts the per-section detail inside it. Splitting the detail across thread messages — chunked at 25 buttons / ~3800 characters each (kept under Discord’s embed description limit) — lets a busy day list every email without the single-message truncation or the 25-button ceiling.
-
-In daemon mode, Hedwig also logs in to Discord Gateway with `DISCORD_BOT_TOKEN` to handle digest/realtime buttons. Digest entries include `查看内容` buttons; clicking one returns an ephemeral preview from Hedwig's local SQLite body cache: classifier summary, rough body text, important links, and a fallback Gmail link. Cached bodies are retained for 7 days and expired rows are deleted automatically.
-
-Required Gmail OAuth scope:
-
-```text
-https://www.googleapis.com/auth/gmail.modify
-```
-
-`gmail.modify` is needed because Hedwig removes junk (including one-time codes) from the Inbox by dropping the `INBOX` label, marks backlog mail read during the opt-in `backfill:unread` run, and — only through the opt-in `cleanup` command — moves expired processed mail to Gmail Trash (recoverable for 30 days). Routine digest processing leaves mail unread and in the Inbox. The code does not call reply, send, permanent-delete, or Drive APIs.
-
-To get a Gmail refresh token, first fill these values in `.env`:
-
-```text
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=http://localhost
-```
-
-Then run:
-
-```bash
-npm run google:auth
-```
-
-Open the printed URL, approve access, copy the `code` query parameter from the redirected URL, and paste it back into the terminal. The script prints the `GOOGLE_REFRESH_TOKEN` line for `.env`.
-
-The preferred multi-account setup is JSON plus local token files. Authorize each account once:
+Set the Google OAuth and Discord values in `.env`, then authorize a Gmail
+account:
 
 ```bash
 npm run google:auth -- main "Main Gmail"
-npm run google:auth -- school "School Gmail"
 ```
 
-Each run opens a Google consent URL, then writes:
-
-```text
-config/gmail-accounts.json
-config/google-tokens/<account_id>.json
-```
-
-Both paths are ignored by git. The resulting JSON looks like:
-
-```json
-{
-  "accounts": [
-    {
-      "id": "main",
-      "displayName": "Main Gmail",
-      "refreshTokenFile": "config/google-tokens/main.json"
-    }
-  ]
-}
-```
-
-Single-account mode can still use `GOOGLE_REFRESH_TOKEN` directly. Legacy env multi-account mode also works with `GMAIL_ACCOUNTS`, where each entry points to the env var that stores that account's refresh token:
-
-```text
-GMAIL_ACCOUNTS=main:Main Gmail:GOOGLE_REFRESH_TOKEN_MAIN,school:School Gmail:GOOGLE_REFRESH_TOKEN_SCHOOL
-GOOGLE_REFRESH_TOKEN_MAIN=
-GOOGLE_REFRESH_TOKEN_SCHOOL=
-```
-
-Account ids must be stable because they are stored in SQLite and used for per-account deduping.
-
-### run once
+The authorization script creates the local account and token files used by the
+default multi-account configuration. Run one processing cycle:
 
 ```bash
 npm run digest:once
 ```
 
-### run daily at Sydney 19:00
+Start the scheduled daemon:
 
 ```bash
 npm run digest:daemon
 ```
 
-Default schedule:
+Classification falls back to local rules when no model is configured. Optional
+classifier settings are listed in `.env.example`.
+
+## Configuration
+
+The main settings are:
+
+| Variable | Purpose |
+| --- | --- |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `GMAIL_ACCOUNTS_JSON` | Local multi-account configuration file |
+| `DISCORD_BOT_TOKEN` | Discord bot token |
+| `DISCORD_DIGEST_CHANNEL_ID` | Daily digest destination |
+| `DISCORD_REALTIME_CHANNEL_ID` | Optional realtime alert destination |
+| `DISCORD_DEBUG_CHANNEL_ID` | Optional operational alert destination |
+| `DIGEST_TIMEZONE` | Digest schedule timezone |
+| `DIGEST_CRON` | Daily digest cron expression |
+| `DIGEST_PROCESS_CRON` | Gmail History polling cron expression |
+| `SQLITE_PATH` | SQLite database path |
+
+Account IDs must remain stable because they are part of the SQLite
+deduplication keys.
+
+### Follow-up Forum
+
+Follow-up support is opt-in:
 
 ```text
-DIGEST_TIMEZONE=Australia/Sydney
-DIGEST_CRON=0 19 * * *
+FOLLOWUP_ENABLED=false
+DISCORD_FOLLOWUP_FORUM_CHANNEL_ID=
 ```
 
-The cron path (`digest:daemon` and `digest:once`) discovers new inbox mail through the Gmail History API, using a per-account `historyId` cursor stored in SQLite (`sync_state`). Discovery is therefore independent of Gmail's read/star/label state — reading a message yourself no longer hides it from Hedwig. The first run (or a cursor that has aged out of Gmail's history retention) bootstraps by scanning the recent `GMAIL_LOOKBACK_HOURS` window once and capturing the current cursor; from then on each run only pulls messages added since the cursor. SQLite (`message_classifications`) remains the idempotency guard, so nothing is processed twice. `GMAIL_UNREAD_ONLY` no longer affects the daemon.
+When disabled, Hedwig ignores the Forum channel setting. When enabled, startup
+requires an accessible Discord Forum channel and validates it before scheduling
+mail jobs.
 
-### backfill older unread mail
+## Discord behavior
 
-```bash
-npm run backfill:unread        # 30 most-recent unread per account
-npm run backfill:unread 1      # smoke test: 1 message per account
-```
+The daily digest posts a compact overview and places full sections in a thread.
+Realtime alerts are sent separately when a realtime channel is configured.
 
-`backfill:unread` drains an unread backlog that predates the cursor's reach. It reuses the same pipeline as the daemon (classify, Discord push, SQLite) but marks handled mail read so repeated runs page through the backlog. Run `backfill:unread 1` after changing the classifier provider, base URL, or model to verify the LLM end-to-end path against real Gmail with minimal side effects.
+Email entries include a content-preview button. The ephemeral preview is served
+from SQLite and includes the summary, attention points, suggested actions, body
+text, useful links, and a Gmail link. Cached bodies expire after seven days.
 
-### clean up expired processed mail
-
-When you have spare time, trash old processed mail that has aged out and never
-needed follow-up:
-
-```bash
-npm run cleanup                # DRY-RUN: print the messages that would be trashed
-npm run cleanup -- --apply     # move them to Gmail Trash (recoverable for 30 days)
-```
-
-`cleanup` only looks at mail Hedwig already processed (in SQLite). A message is
-eligible when its category is past that category's TTL:
+Server managers can set the language for future summaries:
 
 ```text
-CLEANUP_TTL_JUNK_DAYS=0        # junk is disposable as soon as it is processed
-CLEANUP_TTL_FYI_DAYS=14
-CLEANUP_TTL_ADMIN_DAYS=30
-CLEANUP_TTL_COURSE_DAYS=never  # course is never auto-trashed (default)
-CLEANUP_TTL_ACTION_DAYS=never  # action is never auto-trashed (default)
-CLEANUP_MAX_PER_ACCOUNT=200    # cap candidates checked per account per run
+/summary-language language:English
 ```
 
-Set any `CLEANUP_TTL_*_DAYS` to `never` (or omit it) to keep that category
-forever. Before trashing, `cleanup` re-checks each candidate's live Gmail state
-and **keeps** anything that is currently starred or carries the
-`Hedwig/Followup` label — that is how a message is marked “needs follow-up”.
-Trashed message ids are recorded in the `cleanup_log` table so later runs skip
-them. Dry-run is the default; nothing is deleted without `--apply`.
+The value is free text with a maximum length of 12 characters. Existing
+summaries are not rewritten.
 
-### probe scripts
+## Commands
 
-```bash
-npm run probe:deepseek   # synthetic email through the configured LLM classifier
-npm run probe:unread     # per-account unread counts in/out of the lookback window
-```
+| Command | Purpose |
+| --- | --- |
+| `npm run google:auth` | Authorize a Gmail account |
+| `npm run digest:once` | Process mail and send one digest |
+| `npm run digest:daemon` | Run History polling and digest schedules |
+| `npm run cleanup` | Delete expired local email body cache rows |
+| `npm run dry-run:preview` | Send a synthetic Discord preview |
+| `npm run check` | Run TypeScript checks |
+| `npm test` | Run the backend test suite |
 
-### run in the background with systemd
-
-Install the user service:
+## Run with systemd
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -224,22 +143,22 @@ systemctl --user daemon-reload
 systemctl --user enable --now hedwig-digest.service
 ```
 
-Check status and logs:
+Check the service:
 
 ```bash
 systemctl --user status hedwig-digest.service
 journalctl --user -u hedwig-digest.service -f
 ```
 
-Keep the user service alive after logout:
+## Repository layout
 
-```bash
-loginctl enable-linger "$USER"
+```text
+apps/backend/
+  prompts/       Classifier prompts
+  scripts/       OAuth, cleanup, probe, and dry-run scripts
+  src/           Gmail, Discord, database, digest, and classifier code
+    gateway/     Personal-data access interfaces and adapters
+apps/frontend/   Reserved for a future admin UI
+config/          Local account and classifier configuration
+data/            Local SQLite data
 ```
-
-## discord channel settings
-- 📅-email-pending
-- 📊-email-digest-daily
-🎓-email-school
-💰-email-finance
-🔧-workflow-debug

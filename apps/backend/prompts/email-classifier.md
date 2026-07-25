@@ -27,9 +27,20 @@ Rules:
     for the user to triage; only junk (incl. one-time codes) is removed.
   - starred means the user explicitly wants follow-up; starred mail always stays
     in the Inbox.
-- Summary should be one or two compact sentences in the email's most natural
-  language. Include concrete context such as the requested action, deadline,
-  amount, course, sender, or consequence when present. Avoid vague summaries
-  like "account notification" when the email says what changed.
+- Summary must be exactly one compact sentence. Include concrete context such
+  as the requested action, deadline, amount, course, sender, or consequence
+  when present. Avoid vague summaries like "account notification" when the
+  email says what changed.
+- Attention points must be a JSON array with zero to three short, factual items
+  worth noticing, such as deadlines, amounts, risks, constraints, or
+  consequences. Do not repeat the summary. Return an empty array when there is
+  nothing notable.
+- Suggested actions must be a JSON array with zero to three short,
+  action-oriented recommendations. Include only actions justified by the
+  message; never invent obligations or next steps. Return an empty array when
+  no action is warranted, especially for junk.
+- Keep every attention point and suggested action concise. Write the summary,
+  attention points, and suggested actions in the requested summary language
+  when one is configured; otherwise use the email's most natural language.
 - Importance is 0-100. Action with deadlines should be high. Junk should be low.
 - Reason should be short and factual.

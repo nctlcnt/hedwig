@@ -1,7 +1,7 @@
 import type { gmail_v1 } from 'googleapis';
 
 export type Category = 'action' | 'fyi' | 'course' | 'admin' | 'junk';
-export type ProcessingAction = 'archive' | 'digest_only' | 'push_now';
+export type ProcessingOutcome = 'suppress' | 'digest_only' | 'push_now';
 
 export type AppConfig = {
   google: {
@@ -19,13 +19,13 @@ export type AppConfig = {
     debugChannelId: string;
     debugCooldownMs: number;
   };
+  followup: FollowupConfig;
   digest: {
     timezone: string;
     cron: string;
     processCron: string;
     lookbackHours: number;
     maxMessages: number;
-    unreadOnly: boolean;
   };
   classifier: {
     provider: 'rule' | 'openai-compatible';
@@ -40,10 +40,14 @@ export type AppConfig = {
     maxRetries: number;
     requestTimeoutMs: number;
   };
-  cleanup: CleanupConfig;
   database: {
     path: string;
   };
+};
+
+export type FollowupConfig = {
+  enabled: boolean;
+  forumChannelId: string;
 };
 
 export type LlmClassifierConfig = {
@@ -58,27 +62,6 @@ export type ClassifierFailure = {
   subject: string;
   gmailUrl: string;
   reason: string;
-};
-
-export type CleanupConfig = {
-  // Per-category time-to-live in days. A category present here is eligible for
-  // trashing once it is older than the given number of days. Categories that
-  // are absent are never trashed (e.g. course, action by default).
-  ttlDays: Partial<Record<Category, number>>;
-  maxPerAccount: number;
-};
-
-export type CleanupCandidate = {
-  accountId: string;
-  gmailId: string;
-  threadId: string;
-  accountEmail: string;
-  from: string;
-  subject: string;
-  category: Category;
-  importance: number;
-  summary: string;
-  processedAt: string;
 };
 
 export type GmailAccountConfig = {
@@ -108,6 +91,8 @@ export type Classification = {
   category: Category;
   importance: number;
   summary: string;
+  attentionPoints: string[];
+  suggestedActions: string[];
   confidence: number;
   reason?: string;
   provider: string;
@@ -122,10 +107,12 @@ export type DigestItem = {
   from: string;
   subject: string;
   summary: string;
+  attentionPoints: string[];
+  suggestedActions: string[];
   importance: number;
   confidence: number;
   provider: string;
-  processedAs: ProcessingAction;
+  processingOutcome: ProcessingOutcome;
   gmailUrl: string;
 };
 
@@ -142,6 +129,8 @@ export type CachedEmailPreview = {
   from: string;
   subject: string;
   summary: string;
+  attentionPoints: string[];
+  suggestedActions: string[];
   bodyText: string;
   links: EmailPreviewLink[];
   gmailUrl: string;

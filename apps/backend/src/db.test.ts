@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import {
   openDatabase,
   findProcessedGmailIds,
   getCachedEmailPreview,
   getSyncCursor,
-  listCleanupCandidates,
-  recordTrashed,
   saveClassification,
   saveEmailBodyCache,
   saveMessage,
@@ -14,7 +16,6 @@ import {
   recordAlertSent,
   createDigestRun
 } from './db.js';
-import { ttlCutoffs } from './cleanup.js';
 import type { AppConfig, Classification, EmailMessage } from './types.js';
 
 const config: AppConfig = {
@@ -31,13 +32,13 @@ const config: AppConfig = {
     debugChannelId: '',
     debugCooldownMs: 60 * 60 * 1000
   },
+  followup: { enabled: false, forumChannelId: '' },
   digest: {
     timezone: 'UTC',
     cron: '0 19 * * *',
     processCron: '*/10 * * * *',
     lookbackHours: 24,
-    maxMessages: 20,
-    unreadOnly: true
+    maxMessages: 20
   },
   classifier: {
     provider: 'rule',
@@ -50,10 +51,6 @@ const config: AppConfig = {
     },
     maxRetries: 4,
     requestTimeoutMs: 60000
-  },
-  cleanup: {
-    ttlDays: { junk: 0, fyi: 14, admin: 30 },
-    maxPerAccount: 200
   },
   database: {
     path: ':memory:'
@@ -87,9 +84,21 @@ const email: EmailMessage = {
 
 saveMessage(db, email.accountEmail, email);
 saveEmailBodyCache(db, email);
+const previewRunId = createDigestRun(db, email.accountId, email.accountEmail, new Date());
+saveClassification(db, previewRunId, email, {
+  category: 'action',
+  importance: 80,
+  summary: 'Register for the course and review the homework document.',
+  attentionPoints: ['Registration closes Friday.', 'The homework document is linked.'],
+  suggestedActions: ['Complete the registration form.', 'Review the homework document.'],
+  confidence: 0.9,
+  provider: 'test'
+}, 'push_now');
 
 const preview = getCachedEmailPreview(db, 'primary:gmail-1');
 assert.ok(preview);
+assert.deepEqual(preview.attentionPoints, ['Registration closes Friday.', 'The homework document is linked.']);
+assert.deepEqual(preview.suggestedActions, ['Complete the registration form.', 'Review the homework document.']);
 assert.deepEqual(new Set(preview.links.map((link) => link.url)), new Set([
   'https://forms.gle/abc123',
   'https://docs.google.com/document/d/abc/edit?usp=sharing&utm_medium=email',
@@ -118,8 +127,11 @@ assert.deepEqual(legacyPreview.links, [
   { url: 'https://example.com/b', label: '打开 example.com/b' }
 ]);
 
-// Cleanup candidate selection: per-category TTL + latest-classification + log exclusion.
 const cleanupDb = openDatabase(config);
+const classificationColumns = cleanupDb.prepare('pragma table_info(message_classifications)').all()
+  .map((row) => (row as { name: string }).name);
+assert.ok(classificationColumns.includes('processing_outcome'));
+assert.ok(!classificationColumns.includes('processed_as'));
 const runId = createDigestRun(cleanupDb, 'primary', 'me@example.com', new Date());
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -147,10 +159,12 @@ function seedClassified(
     category,
     importance: 10,
     summary: `summary ${gmailId}`,
+    attentionPoints: [],
+    suggestedActions: [],
     confidence: 0.5,
     provider: 'rule'
   };
-  saveClassification(cleanupDb, runId, message, classification, 'digest_only');
+  saveClassification(cleanupDb, runId, message, classification, category === 'junk' ? 'suppress' : 'digest_only');
   cleanupDb.prepare(`
     update message_classifications
     set processed_at = ?
@@ -202,23 +216,83 @@ assert.equal(isAlertOnCooldown(cleanupDb, 'sig-a', hour, new Date(t0.getTime() +
 assert.equal(isAlertOnCooldown(cleanupDb, 'sig-fail', hour, t0), false);
 assert.equal(isAlertOnCooldown(cleanupDb, 'sig-fail', hour, new Date(t0.getTime() + 60 * 1000)), false);
 
-const cutoffs = ttlCutoffs(config.cleanup.ttlDays, new Date());
-const candidates = listCleanupCandidates(cleanupDb, 'primary', cutoffs, 200);
-assert.deepEqual(
-  new Set(candidates.map((candidate) => candidate.gmailId)),
-  new Set(['junk-old', 'fyi-stale'])
-);
+// Existing databases migrate the mailbox-action `archive` value to the
+// DB-only `suppress` outcome without touching Gmail.
+const migrationDir = mkdtempSync(join(tmpdir(), 'hedwig-db-migration-'));
+const migrationPath = join(migrationDir, 'legacy.db');
+try {
+  const legacyDb = new Database(migrationPath);
+  legacyDb.exec(`
+    create table digest_runs (
+      id integer primary key autoincrement,
+      account_id text not null default 'primary',
+      account text not null,
+      started_at text not null,
+      finished_at text,
+      status text not null,
+      total_messages integer not null default 0,
+      error text
+    );
+    create table messages (
+      account_id text not null default 'primary',
+      gmail_id text not null,
+      thread_id text not null,
+      account text not null,
+      sender text not null,
+      subject text not null,
+      message_date text,
+      snippet text not null,
+      gmail_url text not null,
+      updated_at text not null,
+      primary key (account_id, gmail_id)
+    );
+    create table message_classifications (
+      id integer primary key autoincrement,
+      run_id integer not null references digest_runs(id) on delete cascade,
+      account_id text not null default 'primary',
+      gmail_id text not null,
+      category text not null,
+      summary text not null,
+      attention_points_json text not null default '[]',
+      suggested_actions_json text not null default '[]',
+      importance integer not null,
+      confidence real not null,
+      provider text not null,
+      reason text not null default '',
+      processed_as text not null default 'digest_only'
+        check (processed_as in ('archive', 'digest_only', 'push_now')),
+      processed_at text,
+      created_at text not null
+    );
+    insert into digest_runs (id, account_id, account, started_at, status)
+    values (1, 'primary', 'me@example.com', '2026-01-01T00:00:00.000Z', 'sent');
+    insert into message_classifications (
+      run_id, account_id, gmail_id, category, summary, importance, confidence,
+      provider, reason, processed_as, processed_at, created_at
+    ) values (
+      1, 'primary', 'legacy-junk', 'junk', 'legacy junk', 1, 1,
+      'test', '', 'archive', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+    );
+  `);
+  legacyDb.close();
 
-// A logged (already trashed) message drops out of the candidate list.
-recordTrashed(cleanupDb, {
-  accountId: 'primary',
-  gmailId: 'junk-old',
-  category: 'junk',
-  importance: 10,
-  processedAt: new Date().toISOString()
-}, 'cleanup');
-
-const afterLog = listCleanupCandidates(cleanupDb, 'primary', cutoffs, 200);
-assert.deepEqual(new Set(afterLog.map((candidate) => candidate.gmailId)), new Set(['fyi-stale']));
+  const migratedDb = openDatabase({
+    ...config,
+    database: { path: migrationPath }
+  });
+  const migratedColumns = migratedDb.prepare('pragma table_info(message_classifications)').all()
+    .map((row) => (row as { name: string }).name);
+  assert.ok(migratedColumns.includes('processing_outcome'));
+  assert.ok(!migratedColumns.includes('processed_as'));
+  const migrated = migratedDb.prepare(`
+    select processing_outcome as processingOutcome
+    from message_classifications
+    where gmail_id = 'legacy-junk'
+  `).get() as { processingOutcome: string };
+  assert.equal(migrated.processingOutcome, 'suppress');
+  migratedDb.close();
+} finally {
+  rmSync(migrationDir, { recursive: true, force: true });
+}
 
 console.log('db.test.ts: all assertions passed');

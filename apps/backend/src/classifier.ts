@@ -192,6 +192,8 @@ export function classifyEmail(email: EmailMessage): Classification {
     category,
     importance: importanceScore(category, email, haystack),
     summary: summarize(email),
+    attentionPoints: [],
+    suggestedActions: [],
     confidence: 0.55,
     provider: 'rule'
   };
@@ -225,10 +227,22 @@ export function normalizeClassification(
     category,
     importance,
     summary,
+    attentionPoints: normalizeDetailList(classification.attentionPoints),
+    suggestedActions: normalizeDetailList(classification.suggestedActions),
     confidence,
     reason: typeof classification.reason === 'string' ? classification.reason.slice(0, 240) : '',
     provider
   };
+}
+
+function normalizeDetailList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const normalized = value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .map((item) => Array.from(item).slice(0, 160).join(''));
+  return [...new Set(normalized)].slice(0, 3);
 }
 
 export function categories(): typeof CATEGORIES {

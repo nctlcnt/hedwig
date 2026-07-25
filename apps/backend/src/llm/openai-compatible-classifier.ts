@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import type { ChatCompletion } from 'openai/resources/chat/completions';
 import type { gmail_v1 } from 'googleapis';
 import { classifyEmail, normalizeClassification } from '../classifier.js';
+import { summaryLanguageInstruction } from '../summary-language.js';
 import type { AppConfig, EmailClassifier, EmailMessage, LlmClassifierConfig } from '../types.js';
 
 const prompt = readFileSync(new URL('../../prompts/email-classifier.md', import.meta.url), 'utf8');
@@ -10,18 +11,23 @@ const prompt = readFileSync(new URL('../../prompts/email-classifier.md', import.
 const SCHEMA_HINT = `Return a JSON object with this exact shape:
 {
   "category": "action" | "fyi" | "course" | "admin" | "junk",
-  "summary": "one or two compact sentences with concrete context in the email's natural language",
+  "summary": "exactly one compact sentence with concrete context",
+  "attentionPoints": ["zero to three concise factual points worth noticing"],
+  "suggestedActions": ["zero to three concise actions justified by the email"],
   "importance": integer 0-100,
   "confidence": number 0-1,
   "reason": "short factual reason"
 }`;
 
-export function createOpenAICompatibleClassifier(config: AppConfig): EmailClassifier {
+export function createOpenAICompatibleClassifier(
+  config: AppConfig,
+  summaryLanguage: string | null = null
+): EmailClassifier {
   if (!config.classifier.llm.apiKey) {
     throw new Error('CLASSIFIER_API_KEY is required when CLASSIFIER_PROVIDER=openai-compatible');
   }
 
-  const systemPrompt = buildSystemPrompt(config.classifier.rulesPath);
+  const systemPrompt = buildSystemPrompt(config.classifier.rulesPath, summaryLanguage);
   const clientOptions = {
     maxRetries: config.classifier.maxRetries,
     timeout: config.classifier.requestTimeoutMs
@@ -100,8 +106,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function buildSystemPrompt(rulesPath: string): string {
-  const base = `${prompt}\n\n${SCHEMA_HINT}`;
+function buildSystemPrompt(rulesPath: string, summaryLanguage: string | null): string {
+  const languageInstruction = summaryLanguageInstruction(summaryLanguage);
+  const base = [prompt, SCHEMA_HINT, languageInstruction].filter(Boolean).join('\n\n');
   const rules = loadUserRules(rulesPath);
   if (!rules) return base;
 

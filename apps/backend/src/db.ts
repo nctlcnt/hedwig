@@ -8,10 +8,9 @@ import type {
   CachedEmailPreview,
   Category,
   Classification,
-  CleanupCandidate,
   DigestItem,
   EmailMessage,
-  ProcessingAction
+  ProcessingOutcome
 } from './types.js';
 
 export type HedwigDb = DatabaseType;
@@ -114,24 +113,28 @@ export function saveClassification(
   runId: number,
   email: EmailMessage,
   classification: Classification,
-  processedAs: ProcessingAction
+  processingOutcome: ProcessingOutcome
 ): void {
   db.prepare(`
     insert into message_classifications (
-      run_id, account_id, gmail_id, category, summary, importance, confidence, provider, reason, processed_as, processed_at, created_at
+      run_id, account_id, gmail_id, category, summary, attention_points_json,
+      suggested_actions_json, importance, confidence, provider, reason,
+      processing_outcome, processed_at, created_at
     )
-    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     runId,
     email.accountId,
     email.id,
     classification.category,
     classification.summary,
+    JSON.stringify(classification.attentionPoints),
+    JSON.stringify(classification.suggestedActions),
     classification.importance,
     classification.confidence,
     classification.provider,
     classification.reason || '',
-    processedAs,
+    processingOutcome,
     new Date().toISOString(),
     new Date().toISOString()
   );
@@ -160,6 +163,25 @@ export function recordAlertSent(db: HedwigDb, signature: string, now: Date = new
     values (?, ?)
     on conflict(signature) do update set last_sent_at = excluded.last_sent_at
   `).run(alertKey(signature), now.toISOString());
+}
+
+const SUMMARY_LANGUAGE_SETTING = 'summary_language';
+
+export function getSummaryLanguage(db: HedwigDb): string | null {
+  const row = db.prepare(`
+    select value from app_settings where key = ?
+  `).get(SUMMARY_LANGUAGE_SETTING) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSummaryLanguage(db: HedwigDb, language: string): void {
+  db.prepare(`
+    insert into app_settings (key, value, updated_at)
+    values (?, ?, ?)
+    on conflict(key) do update set
+      value = excluded.value,
+      updated_at = excluded.updated_at
+  `).run(SUMMARY_LANGUAGE_SETTING, language, new Date().toISOString());
 }
 
 // The per-account incremental-sync cursor (a Gmail historyId). This is how
@@ -212,10 +234,12 @@ export function listProcessedDigestItems(
       m.subject as subject,
       c.category as category,
       c.summary as summary,
+      c.attention_points_json as attentionPointsJson,
+      c.suggested_actions_json as suggestedActionsJson,
       c.importance as importance,
       c.confidence as confidence,
       c.provider as provider,
-      c.processed_as as processedAs,
+      c.processing_outcome as processingOutcome,
       c.processed_at as processedAt
     from message_classifications c
     join messages m
@@ -230,6 +254,7 @@ export function listProcessedDigestItems(
       on latest.account_id = c.account_id
       and latest.gmail_id = c.gmail_id
       and latest.id = c.id
+    where c.processing_outcome != 'suppress'
     order by c.importance desc, c.processed_at desc
   `).all(start.toISOString(), end.toISOString()) as Array<{
     accountId: string;
@@ -240,10 +265,12 @@ export function listProcessedDigestItems(
     subject: string;
     category: Category;
     summary: string;
+    attentionPointsJson: string;
+    suggestedActionsJson: string;
     importance: number;
     confidence: number;
     provider: string;
-    processedAs: ProcessingAction;
+    processingOutcome: ProcessingOutcome;
   }>;
 
   return rows.map((row) => ({
@@ -255,10 +282,12 @@ export function listProcessedDigestItems(
     from: row.sender,
     subject: row.subject,
     summary: row.summary,
+    attentionPoints: parseStringArray(row.attentionPointsJson),
+    suggestedActions: parseStringArray(row.suggestedActionsJson),
     importance: row.importance,
     confidence: row.confidence,
     provider: row.provider,
-    processedAs: row.processedAs,
+    processingOutcome: row.processingOutcome,
     gmailUrl: buildGmailMessageUrl(row.accountEmail, row.threadId)
   }));
 }
@@ -277,6 +306,8 @@ export function getCachedEmailPreview(db: HedwigDb, mailId: string): CachedEmail
       m.sender as sender,
       m.subject as subject,
       c.summary as summary,
+      c.attention_points_json as attentionPointsJson,
+      c.suggested_actions_json as suggestedActionsJson,
       b.body_text as bodyText,
       b.links_json as linksJson,
       b.expires_at as expiresAt
@@ -307,6 +338,8 @@ export function getCachedEmailPreview(db: HedwigDb, mailId: string): CachedEmail
     sender: string;
     subject: string;
     summary: string | null;
+    attentionPointsJson: string | null;
+    suggestedActionsJson: string | null;
     bodyText: string;
     linksJson: string;
     expiresAt: string;
@@ -322,6 +355,8 @@ export function getCachedEmailPreview(db: HedwigDb, mailId: string): CachedEmail
     from: row.sender,
     subject: row.subject,
     summary: row.summary || '',
+    attentionPoints: parseStringArray(row.attentionPointsJson),
+    suggestedActions: parseStringArray(row.suggestedActionsJson),
     bodyText: row.bodyText,
     links: parseLinks(row.linksJson),
     gmailUrl: buildGmailMessageUrl(row.accountName, row.threadId),
@@ -335,105 +370,6 @@ export function deleteExpiredEmailBodyCache(db: HedwigDb): number {
     where expires_at <= ?
   `).run(new Date().toISOString());
   return result.changes;
-}
-
-// Processed messages eligible for the cleanup pass: the latest classification per
-// message whose category is past its TTL cutoff and that has not already been
-// logged as trashed. `cutoffs` maps an eligible category to the ISO timestamp on
-// or before which a message of that category is considered expired.
-export function listCleanupCandidates(
-  db: HedwigDb,
-  accountId: string,
-  cutoffs: Partial<Record<Category, string>>,
-  limit: number
-): CleanupCandidate[] {
-  const eligible = Object.keys(cutoffs) as Category[];
-  if (eligible.length === 0 || limit <= 0) return [];
-
-  const conditions = eligible.map(() => '(c.category = ? and c.processed_at <= ?)').join(' or ');
-  const params: Array<string | number> = [accountId];
-  for (const category of eligible) {
-    params.push(category, cutoffs[category] as string);
-  }
-  params.push(limit);
-
-  const rows = db.prepare(`
-    select
-      m.account_id as accountId,
-      m.gmail_id as gmailId,
-      m.thread_id as threadId,
-      m.account as accountEmail,
-      m.sender as sender,
-      m.subject as subject,
-      c.category as category,
-      c.importance as importance,
-      c.summary as summary,
-      c.processed_at as processedAt
-    from messages m
-    join (
-      select account_id, gmail_id, max(id) as id
-      from message_classifications
-      group by account_id, gmail_id
-    ) latest
-      on latest.account_id = m.account_id
-      and latest.gmail_id = m.gmail_id
-    join message_classifications c
-      on c.id = latest.id
-    where m.account_id = ?
-      and not exists (
-        select 1 from cleanup_log cl
-        where cl.account_id = m.account_id and cl.gmail_id = m.gmail_id
-      )
-      and (${conditions})
-    order by c.processed_at asc
-    limit ?
-  `).all(...params) as Array<{
-    accountId: string;
-    gmailId: string;
-    threadId: string;
-    accountEmail: string;
-    sender: string;
-    subject: string;
-    category: Category;
-    importance: number;
-    summary: string;
-    processedAt: string;
-  }>;
-
-  return rows.map((row) => ({
-    accountId: row.accountId,
-    gmailId: row.gmailId,
-    threadId: row.threadId,
-    accountEmail: row.accountEmail,
-    from: row.sender,
-    subject: row.subject,
-    category: row.category,
-    importance: row.importance,
-    summary: row.summary,
-    processedAt: row.processedAt
-  }));
-}
-
-export function recordTrashed(
-  db: HedwigDb,
-  candidate: Pick<CleanupCandidate, 'accountId' | 'gmailId' | 'category' | 'importance' | 'processedAt'>,
-  reason: string
-): void {
-  db.prepare(`
-    insert into cleanup_log (account_id, gmail_id, category, importance, processed_at, trashed_at, reason)
-    values (?, ?, ?, ?, ?, ?, ?)
-    on conflict(account_id, gmail_id) do update set
-      trashed_at = excluded.trashed_at,
-      reason = excluded.reason
-  `).run(
-    candidate.accountId,
-    candidate.gmailId,
-    candidate.category,
-    candidate.importance,
-    candidate.processedAt,
-    new Date().toISOString(),
-    reason
-  );
 }
 
 function migrate(db: HedwigDb): void {
@@ -475,11 +411,14 @@ function migrate(db: HedwigDb): void {
       gmail_id text not null,
       category text not null check (category in ('action', 'fyi', 'course', 'admin', 'junk')),
       summary text not null,
+      attention_points_json text not null default '[]',
+      suggested_actions_json text not null default '[]',
       importance integer not null,
       confidence real not null,
       provider text not null,
       reason text not null default '',
-      processed_as text not null default 'digest_only' check (processed_as in ('archive', 'digest_only', 'push_now')),
+      processing_outcome text not null default 'digest_only'
+        check (processing_outcome in ('suppress', 'digest_only', 'push_now')),
       processed_at text not null default CURRENT_TIMESTAMP,
       created_at text not null
     );
@@ -517,6 +456,12 @@ function migrate(db: HedwigDb): void {
       last_sent_at text not null
     );
 
+    create table if not exists app_settings (
+      key text not null primary key,
+      value text not null,
+      updated_at text not null
+    );
+
     create index if not exists idx_message_classifications_run_id
       on message_classifications(run_id);
 
@@ -529,8 +474,10 @@ function migrate(db: HedwigDb): void {
 
   addColumnIfMissing(db, 'digest_runs', 'account_id', "text not null default 'primary'");
   addColumnIfMissing(db, 'message_classifications', 'account_id', "text not null default 'primary'");
-  addColumnIfMissing(db, 'message_classifications', 'processed_as', "text not null default 'digest_only'");
   addColumnIfMissing(db, 'message_classifications', 'processed_at', 'text');
+  addColumnIfMissing(db, 'message_classifications', 'attention_points_json', "text not null default '[]'");
+  addColumnIfMissing(db, 'message_classifications', 'suggested_actions_json', "text not null default '[]'");
+  migrateProcessingOutcome(db);
   backfillProcessedAt(db);
   deleteExpiredEmailBodyCache(db);
 }
@@ -542,6 +489,17 @@ function parseMailId(mailId: string): { accountId: string; gmailId: string } | n
     accountId: mailId.slice(0, separator),
     gmailId: mailId.slice(separator + 1)
   };
+}
+
+function parseStringArray(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === 'string');
+  } catch {
+    return [];
+  }
 }
 
 type ScoredLink = {
@@ -791,25 +749,102 @@ function migrateMessagesToAccountScopedKeys(db: HedwigDb): void {
           gmail_id text not null,
           category text not null check (category in ('action', 'fyi', 'course', 'admin', 'junk')),
           summary text not null,
+          attention_points_json text not null default '[]',
+          suggested_actions_json text not null default '[]',
           importance integer not null,
           confidence real not null,
           provider text not null,
           reason text not null default '',
-          processed_as text not null default 'digest_only' check (processed_as in ('archive', 'digest_only', 'push_now')),
+          processing_outcome text not null default 'digest_only'
+            check (processing_outcome in ('suppress', 'digest_only', 'push_now')),
           processed_at text not null default CURRENT_TIMESTAMP,
           created_at text not null
         );
 
         insert into message_classifications (
-          id, run_id, account_id, gmail_id, category, summary, importance, confidence, provider, reason, processed_as, processed_at, created_at
+          id, run_id, account_id, gmail_id, category, summary, attention_points_json,
+          suggested_actions_json, importance, confidence, provider, reason,
+          processing_outcome, processed_at, created_at
         )
-        select id, run_id, 'primary', gmail_id, category, summary, importance, confidence, provider, reason, 'digest_only', created_at, created_at
+        select id, run_id, 'primary', gmail_id, category, summary, '[]', '[]',
+          importance, confidence, provider, reason, 'digest_only', created_at, created_at
         from message_classifications_legacy_single_account;
 
         drop table message_classifications_legacy_single_account;
       `);
     }
     db.exec('commit;');
+  } catch (error) {
+    db.exec('rollback;');
+    throw error;
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+}
+
+function migrateProcessingOutcome(db: HedwigDb): void {
+  const columns = tableColumns(db, 'message_classifications');
+  if (columns.includes('processing_outcome')) return;
+  if (!columns.includes('processed_as')) {
+    addColumnIfMissing(
+      db,
+      'message_classifications',
+      'processing_outcome',
+      "text not null default 'digest_only'"
+    );
+    return;
+  }
+
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.exec(`
+      begin;
+
+      alter table message_classifications rename to message_classifications_legacy_mailbox_actions;
+      drop index if exists idx_message_classifications_run_id;
+      drop index if exists idx_message_classifications_gmail_id;
+
+      create table message_classifications (
+        id integer primary key autoincrement,
+        run_id integer not null references digest_runs(id) on delete cascade,
+        account_id text not null default 'primary',
+        gmail_id text not null,
+        category text not null check (category in ('action', 'fyi', 'course', 'admin', 'junk')),
+        summary text not null,
+        attention_points_json text not null default '[]',
+        suggested_actions_json text not null default '[]',
+        importance integer not null,
+        confidence real not null,
+        provider text not null,
+        reason text not null default '',
+        processing_outcome text not null default 'digest_only'
+          check (processing_outcome in ('suppress', 'digest_only', 'push_now')),
+        processed_at text not null default CURRENT_TIMESTAMP,
+        created_at text not null
+      );
+
+      insert into message_classifications (
+        id, run_id, account_id, gmail_id, category, summary,
+        attention_points_json, suggested_actions_json, importance, confidence,
+        provider, reason, processing_outcome, processed_at, created_at
+      )
+      select
+        id, run_id, account_id, gmail_id, category, summary,
+        attention_points_json, suggested_actions_json, importance, confidence,
+        provider, reason,
+        case processed_as when 'archive' then 'suppress' else processed_as end,
+        coalesce(processed_at, created_at), created_at
+      from message_classifications_legacy_mailbox_actions;
+
+      drop table message_classifications_legacy_mailbox_actions;
+
+      create index if not exists idx_message_classifications_run_id
+        on message_classifications(run_id);
+      create index if not exists idx_message_classifications_gmail_id
+        on message_classifications(account_id, gmail_id);
+
+      commit;
+    `);
   } catch (error) {
     db.exec('rollback;');
     throw error;
