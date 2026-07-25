@@ -1,6 +1,11 @@
 import 'dotenv/config';
 import { existsSync, readFileSync } from 'node:fs';
-import type { AppConfig, Category, CleanupConfig, GmailAccountConfig, LlmClassifierConfig } from './types.js';
+import type {
+  AppConfig,
+  FollowupConfig,
+  GmailAccountConfig,
+  LlmClassifierConfig
+} from './types.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -20,12 +25,35 @@ function integer(name: string, fallback: number): number {
   return parsed;
 }
 
-function boolean(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
+function boolean(name: string, fallback: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[name];
   if (!raw) return fallback;
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
+
+  if (raw.trim().toLowerCase() === 'true') return true;
+  if (raw.trim().toLowerCase() === 'false') return false;
   throw new Error(`${name} must be "true" or "false"`);
+}
+
+export function loadFollowupConfig(env: NodeJS.ProcessEnv = process.env): FollowupConfig {
+  const enabled = boolean('FOLLOWUP_ENABLED', false, env);
+  if (!enabled) {
+    return {
+      enabled: false,
+      forumChannelId: ''
+    };
+  }
+
+  const forumChannelId = env.DISCORD_FOLLOWUP_FORUM_CHANNEL_ID?.trim();
+  if (!forumChannelId) {
+    throw new Error(
+      'Missing required environment variable when FOLLOWUP_ENABLED=true: DISCORD_FOLLOWUP_FORUM_CHANNEL_ID'
+    );
+  }
+
+  return {
+    enabled: true,
+    forumChannelId
+  };
 }
 
 export function loadConfig(): AppConfig {
@@ -50,13 +78,13 @@ export function loadConfig(): AppConfig {
       debugChannelId: process.env.DISCORD_DEBUG_CHANNEL_ID || '',
       debugCooldownMs: integer('DISCORD_DEBUG_COOLDOWN_MINUTES', 60) * 60 * 1000
     },
+    followup: loadFollowupConfig(),
     digest: {
       timezone: process.env.DIGEST_TIMEZONE || 'Australia/Sydney',
       cron: process.env.DIGEST_CRON || '0 19 * * *',
       processCron: process.env.DIGEST_PROCESS_CRON || '*/5 * * * *',
       lookbackHours: integer('GMAIL_LOOKBACK_HOURS', 24),
-      maxMessages: integer('GMAIL_MAX_MESSAGES', 100),
-      unreadOnly: boolean('GMAIL_UNREAD_ONLY', true)
+      maxMessages: integer('GMAIL_MAX_MESSAGES', 100)
     },
     classifier: {
       provider,
@@ -71,7 +99,6 @@ export function loadConfig(): AppConfig {
       maxRetries: integer('CLASSIFIER_MAX_RETRIES', 4),
       requestTimeoutMs: integer('CLASSIFIER_TIMEOUT_MS', 60000)
     },
-    cleanup: cleanupConfig(),
     database: {
       path: process.env.SQLITE_PATH || 'data/hedwig.db'
     }
@@ -92,42 +119,6 @@ function fallbackLlmConfig(): LlmClassifierConfig | undefined {
     model: process.env.CLASSIFIER_FALLBACK_MODEL || process.env.CLASSIFIER_MODEL || 'deepseek-v4-pro',
     providerName: process.env.CLASSIFIER_FALLBACK_PROVIDER_NAME || 'fallback'
   };
-}
-
-function cleanupConfig(): CleanupConfig {
-  // Defaults: junk is disposable as soon as it is processed; fyi/admin are kept
-  // for a grace window; course/action are never auto-trashed. Set any
-  // CLEANUP_TTL_*_DAYS to "never" (or omit it) to keep that category forever.
-  const defaults: Array<[Category, number | null]> = [
-    ['junk', 0],
-    ['fyi', 14],
-    ['admin', 30],
-    ['course', null],
-    ['action', null]
-  ];
-
-  const ttlDays: Partial<Record<Category, number>> = {};
-  for (const [category, fallback] of defaults) {
-    const days = ttlDaysFor(`CLEANUP_TTL_${category.toUpperCase()}_DAYS`, fallback);
-    if (days !== null) ttlDays[category] = days;
-  }
-
-  return {
-    ttlDays,
-    maxPerAccount: integer('CLEANUP_MAX_PER_ACCOUNT', 200)
-  };
-}
-
-function ttlDaysFor(name: string, fallback: number | null): number | null {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const trimmed = raw.trim().toLowerCase();
-  if (trimmed === '' || trimmed === 'never' || trimmed === 'off') return null;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`${name} must be a non-negative integer or "never"`);
-  }
-  return parsed;
 }
 
 function gmailAccounts(): GmailAccountConfig[] {

@@ -5,7 +5,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import 'dotenv/config';
 import { google } from 'googleapis';
 
-const scope = 'https://www.googleapis.com/auth/gmail.modify';
+const scope = 'https://www.googleapis.com/auth/gmail.readonly';
 const accountId = process.argv[2];
 const accountName = process.argv[3] || accountId;
 const accountsPath = process.env.GMAIL_ACCOUNTS_JSON || 'config/gmail-accounts.json';

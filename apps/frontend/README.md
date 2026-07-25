@@ -2,4 +2,4 @@
 
 Placeholder for a future admin UI.
 
-The first working slice is backend-only: Gmail -> classifier -> Gmail labels -> Discord digest.
+The current product is backend-only: Gmail -> classifier -> SQLite -> Discord.

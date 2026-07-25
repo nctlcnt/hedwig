@@ -2,9 +2,9 @@ import { classifyEmail } from './classifier.js';
 import { createOpenAICompatibleClassifier } from './llm/openai-compatible-classifier.js';
 import type { AppConfig, EmailClassifier } from './types.js';
 
-export function createClassifier(config: AppConfig): EmailClassifier {
+export function createClassifier(config: AppConfig, summaryLanguage: string | null = null): EmailClassifier {
   if (config.classifier.provider === 'openai-compatible') {
-    return createOpenAICompatibleClassifier(config);
+    return createOpenAICompatibleClassifier(config, summaryLanguage);
   }
 
   if (config.classifier.provider !== 'rule') {

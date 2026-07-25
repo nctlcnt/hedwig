@@ -24,9 +24,20 @@ if (mode === 'once') {
     process.exitCode = 1;
   });
 } else if (mode === 'daemon') {
-  startDiscordBot(config, db);
+  startDaemon().catch((error) => {
+    console.error('Failed to start daemon', error);
+    db.close();
+    process.exitCode = 1;
+  });
+} else {
+  console.error(`Unknown mode: ${mode}. Use "once" or "daemon".`);
+  process.exitCode = 1;
+}
 
-  console.log(`Scheduling unread mail processing with "${config.digest.processCron}" in ${config.digest.timezone}`);
+async function startDaemon(): Promise<void> {
+  await startDiscordBot(config, db);
+
+  console.log(`Scheduling Gmail History processing with "${config.digest.processCron}" in ${config.digest.timezone}`);
   cron.schedule(
     config.digest.processCron,
     () => {
@@ -57,7 +68,4 @@ if (mode === 'once') {
     },
     { timezone: config.digest.timezone }
   );
-} else {
-  console.error(`Unknown mode: ${mode}. Use "once" or "daemon".`);
-  process.exitCode = 1;
 }

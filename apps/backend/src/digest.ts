@@ -6,6 +6,7 @@ import {
   failDigestRun,
   findProcessedGmailIds,
   finishDigestRun,
+  getSummaryLanguage,
   getSyncCursor,
   listProcessedDigestItems,
   saveEmailBodyCache,
@@ -26,7 +27,7 @@ import type {
   DigestItem,
   DigestReport,
   EmailMessage,
-  ProcessingAction
+  ProcessingOutcome
 } from './types.js';
 import type { HedwigDb } from './db.js';
 import type { MailAccount, MailGateway } from './gateway/mail-gateway.js';
@@ -40,19 +41,6 @@ type AccountProcessResult = {
   total: number;
   error?: string;
 };
-
-// What Hedwig does to a message in Gmail after processing it. Dedup is tracked
-// in the database (see findProcessedGmailIds), so the default leaves the message
-// untouched: still unread, still in the inbox, for the user to triage by hand.
-type SideEffects = {
-  markRead: boolean;
-  archiveUnstarred: boolean;
-};
-
-const PASSIVE_SIDE_EFFECTS: SideEffects = { markRead: false, archiveUnstarred: false };
-// Backfill drains a large unread backlog; it still marks read so successive runs
-// can page past what it already handled. It leaves mail in the inbox.
-const BACKFILL_SIDE_EFFECTS: SideEffects = { markRead: true, archiveUnstarred: false };
 
 export async function runDailyDigest(config: AppConfig, db: HedwigDb, mailGateway: MailGateway): Promise<DigestReport> {
   const results = await processUnreadMail(config, db, mailGateway);
@@ -73,21 +61,6 @@ export async function processUnreadMail(
   return results;
 }
 
-export async function backfillUnreadMail(
-  config: AppConfig,
-  db: HedwigDb,
-  mailGateway: MailGateway,
-  limitPerAccount: number
-): Promise<AccountProcessResult[]> {
-  const results: AccountProcessResult[] = [];
-
-  for (const account of mailGateway.listAccounts()) {
-    results.push(await backfillAccountUnreadMail(config, account, mailGateway, db, limitPerAccount));
-  }
-
-  return results;
-}
-
 export async function sendTodayDigest(
   config: AppConfig,
   db: HedwigDb,
@@ -95,7 +68,7 @@ export async function sendTodayDigest(
 ): Promise<DigestReport> {
   const window = todayWindow(config);
   const items = listProcessedDigestItems(db, window.start, window.end);
-  const digest = await buildDigest(config, items, results);
+  const digest = await buildDigest(config, items, results, getSummaryLanguage(db));
   await sendDiscordDigest(config, digest);
   return digest;
 }
@@ -109,7 +82,7 @@ async function processAccountUnreadMail(
   const startCursor = getSyncCursor(db, accountConfig.id);
   let nextCursor: string | null = null;
 
-  const result = await runAccountClassificationPass(config, accountConfig, mailGateway, db, PASSIVE_SIDE_EFFECTS, async () => {
+  const result = await runAccountClassificationPass(config, accountConfig, mailGateway, db, async () => {
     const sync = await mailGateway.syncInboxMessages(accountConfig, {
       cursor: startCursor,
       lookbackHours: config.digest.lookbackHours,
@@ -131,30 +104,17 @@ async function processAccountUnreadMail(
   return result;
 }
 
-async function backfillAccountUnreadMail(
-  config: AppConfig,
-  accountConfig: MailAccount,
-  mailGateway: MailGateway,
-  db: HedwigDb,
-  limit: number
-): Promise<AccountProcessResult> {
-  return runAccountClassificationPass(config, accountConfig, mailGateway, db, BACKFILL_SIDE_EFFECTS, async () => (
-    mailGateway.listUnreadInboxMessages(accountConfig, { limit })
-  ));
-}
-
 async function runAccountClassificationPass(
   config: AppConfig,
   accountConfig: MailAccount,
   mailGateway: MailGateway,
   db: HedwigDb,
-  sideEffects: SideEffects,
   fetchRefs: () => Promise<{ id?: string | null }[]>
 ): Promise<AccountProcessResult> {
   let account = accountConfig.displayName;
   const runId = createDigestRun(db, accountConfig.id, account, new Date());
   const counts = zeroCounts();
-  const classifier = createClassifier(config);
+  const classifier = createClassifier(config, getSummaryLanguage(db));
   const classifierFailures: ClassifierFailure[] = [];
 
   try {
@@ -173,7 +133,7 @@ async function runAccountClassificationPass(
       }
 
       const classification = await classifier.classify(email);
-      const processedAs = processingAction(classification.category);
+      const processingOutcome = processingOutcomeFor(classification.category);
 
       if (classification.provider === 'rule-fallback') {
         classifierFailures.push({
@@ -186,21 +146,10 @@ async function runAccountClassificationPass(
 
       saveMessage(db, account, email);
       saveEmailBodyCache(db, email);
-      saveClassification(db, runId, email, classification, processedAs);
+      saveClassification(db, runId, email, classification, processingOutcome);
 
-      // Junk (incl. one-time codes) always leaves the inbox; other categories
-      // only when archive-everything is on. Starred mail always stays.
-      const archive = !shouldKeepInInbox(email)
-        && (processedAs === 'archive' || sideEffects.archiveUnstarred);
-      if (archive) {
-        await mailGateway.removeFromInbox(accountConfig, [email.id]);
-      }
-      if (processedAs === 'push_now') {
-        await sendDiscordRealtime(config, digestItem(accountConfig, account, email, classification, processedAs));
-      }
-
-      if (sideEffects.markRead) {
-        await mailGateway.markMessagesRead(accountConfig, [email.id]);
+      if (processingOutcome === 'push_now') {
+        await sendDiscordRealtime(config, digestItem(accountConfig, account, email, classification, processingOutcome));
       }
       counts[classification.category] += 1;
     }
@@ -253,7 +202,7 @@ function digestItem(
   account: string,
   email: EmailMessage,
   classification: Classification,
-  processedAs: ProcessingAction
+  processingOutcome: ProcessingOutcome
 ): DigestItem {
   return {
     accountId: accountConfig.id,
@@ -264,36 +213,39 @@ function digestItem(
     from: email.from,
     subject: email.subject,
     summary: classification.summary,
+    attentionPoints: classification.attentionPoints,
+    suggestedActions: classification.suggestedActions,
     importance: classification.importance,
     confidence: classification.confidence,
     provider: classification.provider,
-    processedAs,
+    processingOutcome,
     gmailUrl: email.gmailUrl
   };
 }
 
-function processingAction(category: Category): ProcessingAction {
-  if (category === 'junk') return 'archive';
+function processingOutcomeFor(category: Category): ProcessingOutcome {
+  if (category === 'junk') return 'suppress';
   if (category === 'action') return 'push_now';
   return 'digest_only';
-}
-
-function shouldKeepInInbox(email: EmailMessage): boolean {
-  return email.labelIds.includes('STARRED');
 }
 
 function emptyGroups(): Record<Category, DigestItem[]> {
   return Object.fromEntries(categoryOrder().map((category) => [category, []])) as unknown as Record<Category, DigestItem[]>;
 }
 
-async function buildDigest(config: AppConfig, items: DigestItem[], results: AccountProcessResult[]): Promise<DigestReport> {
+async function buildDigest(
+  config: AppConfig,
+  items: DigestItem[],
+  results: AccountProcessResult[],
+  summaryLanguage: string | null
+): Promise<DigestReport> {
   const grouped = groupItems(items);
   for (const category of categoryOrder()) {
     grouped[category].sort((a, b) => b.importance - a.importance);
   }
   const counts = groupCounts(grouped);
   const total = totalCount(counts);
-  const leads = total > 0 ? await summarizeSections(config, grouped) : blankLeads();
+  const leads = total > 0 ? await summarizeSections(config, grouped, summaryLanguage) : blankLeads();
   const metadata = categories();
   const sections = categoryOrder().map((category) => ({
     category,

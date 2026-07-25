@@ -35,6 +35,8 @@ const classification = {
   category: 'action' as const,
   importance: 90,
   summary: 'Dry-run preview test with one important link.',
+  attentionPoints: ['The cached preview expires after seven days.'],
+  suggestedActions: ['Click 查看内容 and verify the structured preview.'],
   confidence: 1,
   provider: 'dry-run',
   reason: 'Manual preview button test'
@@ -53,10 +55,12 @@ const item: DigestItem = {
   from: email.from,
   subject: email.subject,
   summary: classification.summary,
+  attentionPoints: classification.attentionPoints,
+  suggestedActions: classification.suggestedActions,
   importance: classification.importance,
   confidence: classification.confidence,
   provider: classification.provider,
-  processedAs: 'push_now',
+  processingOutcome: 'push_now',
   gmailUrl
 };
 

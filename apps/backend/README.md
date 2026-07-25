@@ -1,17 +1,18 @@
 # Hedwig backend
 
-Node service for multi-account Gmail digest, Gmail labels, Discord delivery, and classifier providers.
+Node service for a read-only multi-account Gmail digest, Discord delivery, and classifier providers.
 
 Hedwig's mail flow depends on the internal `MailGateway` boundary instead of importing Gmail API helpers directly. The current gateway implementation is still Gmail-backed and uses the same OAuth/config/token files, but the product layer now treats personal mail access as a replaceable adapter.
 
 New inbox mail is discovered through the Gmail History API: a per-account `historyId` cursor is stored in SQLite (`sync_state`) and each run pulls only the messages added since that cursor, independent of read/star/label state. The first run (or an expired cursor) bootstraps from the recent `GMAIL_LOOKBACK_HOURS` window. Which messages have already been handled is tracked in SQLite (`message_classifications`), not by the Gmail read flag, so processed mail can be left unread/in-inbox without being reprocessed, and the cursor only advances after a run finishes cleanly. Scheduled digests read today's stored handling results from SQLite rather than doing a fresh inbox classification pass.
 
-Gmail state is intentionally minimal:
+Gmail is intentionally read-only:
 
-- by default Hedwig leaves processed mail unread and in the Inbox for the user to triage by hand; processed/unprocessed is tracked in SQLite
-- junk (including disposable one-time codes) is removed from the Inbox so it does not pile up
-- starred means the message needs follow-up and always remains in Inbox
-- `Hedwig/Followup` is the only Hedwig-managed Gmail label, reserved for explicit follow-up tracking/history
+- History cursor discovers new Inbox messages.
+- SQLite tracks processing, suppression and future follow-up state.
+- Junk and disposable codes receive the DB-only `suppress` outcome and are
+  omitted from Discord output.
+- Hedwig never changes Gmail read, star, label, Inbox or Trash state.
 
 Current providers:
 
@@ -26,22 +27,38 @@ npm run digest:daemon
 npm run google:auth
 ```
 
-`digest:daemon` processes unread mail every `DIGEST_PROCESS_CRON` interval, defaulting to `*/5 * * * *`, and sends the daily digest at `DIGEST_CRON`. Action-classified messages are pushed immediately to `DISCORD_REALTIME_CHANNEL_ID`; if that variable is unset the push is skipped and the message only surfaces in the next digest (no fallback to the digest channel, to avoid duplicate posts). Processed mail is left unread and in the Inbox (dedup is tracked in SQLite); only junk/one-time-code mail is removed from the Inbox, and starred mail always stays.
+`digest:daemon` processes Gmail History updates every `DIGEST_PROCESS_CRON` interval, defaulting to `*/5 * * * *`, and sends the daily digest at `DIGEST_CRON`. Action-classified messages are pushed immediately to `DISCORD_REALTIME_CHANNEL_ID`; if that variable is unset the push is skipped and the message only surfaces in the next digest (no fallback to the digest channel, to avoid duplicate posts). Gmail mailbox state is never changed.
+
+Server managers can use `/summary-language language:<language>` in Discord to set
+the language for future LLM-generated message summaries, attention points,
+suggested actions, and daily section leads. The free-text value is limited to
+12 characters, persists in SQLite, and does not rewrite historical
+classifications. Each LLM classification emits exactly one summary sentence
+plus zero to three attention points and suggested actions; these structured
+details are shown in the ephemeral content preview.
 
 Operational problems — cron exceptions, per-account processing failures, Discord send failures, and classifier rule-fallbacks — are posted to `DISCORD_DEBUG_CHANNEL_ID` when set. They are deduped by signature: the same problem is silenced for `DISCORD_DEBUG_COOLDOWN_MINUTES` (default 60) after it fires, so a persistent error pings once per window rather than every run. Leave the channel unset to disable.
 
+Follow-up support is disabled by default. With `FOLLOWUP_ENABLED=false`, the
+daemon does not require or validate `DISCORD_FOLLOWUP_FORUM_CHANNEL_ID`. With
+`FOLLOWUP_ENABLED=true`, that ID is required and the daemon checks after Discord
+login that the bot can access a `GuildForum` channel there. A missing,
+inaccessible, or non-Forum channel stops daemon startup before cron jobs are
+scheduled.
+
 The cron path (`digest:daemon` and `digest:once`) discovers new inbox mail incrementally via the Gmail History API cursor; only the bootstrap/recovery scan is bounded by `GMAIL_LOOKBACK_HOURS`.
 
-## Backfill and probes
+## Maintenance and probes
 
 ```bash
-npm run backfill:unread        # 30 most-recent unread per account
-npm run backfill:unread 1      # smoke test: 1 message per account
 npm run probe:deepseek         # synthetic classification, asserts provider=deepseek
-npm run probe:unread           # per-account unread counts in/out of the lookback window
+npm run dry-run:preview        # synthetic Discord preview backed by SQLite
+npm run cleanup                # delete expired SQLite body/link cache rows
 ```
 
-`backfill:unread` ignores `GMAIL_LOOKBACK_HOURS` and reuses the same classify + Discord + SQLite pipeline as the daemon. Unlike the daemon it does mark handled mail read, so repeated runs can page past the backlog it already drained (it still leaves mail in the Inbox). Use `backfill:unread 1` to verify the end-to-end LLM path against real Gmail with minimal side effects.
+There is no unread-state backfill or Gmail cleanup path. Bootstrap and
+cursor-expiry recovery use the bounded `GMAIL_LOOKBACK_HOURS` window without
+modifying the mailbox.
 
 For multiple Gmail accounts, prefer JSON token files:
 
