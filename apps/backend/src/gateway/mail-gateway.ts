@@ -30,5 +30,8 @@ export type MailGateway = {
   listAccounts(): MailAccount[];
   getCurrentUser(account: MailAccount): Promise<string>;
   syncInboxMessages(account: MailAccount, options: MailSyncOptions): Promise<MailSyncResult>;
-  getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage>;
+  // A message referenced by an incremental sync can disappear before it is
+  // fetched (for example, when it is permanently deleted). Treat that normal
+  // source race as an absent message instead of failing the whole sync batch.
+  getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage | null>;
 };
