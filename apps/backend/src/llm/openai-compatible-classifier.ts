@@ -19,6 +19,33 @@ const SCHEMA_HINT = `Return a JSON object with this exact shape:
   "reason": "short factual reason"
 }`;
 
+// Not wired into classifyBatch yet (that lands with the real batched LLM call
+// in a later micro-batch step); these are the prompt pieces docs/micro-batch.md
+// section 9 specifies for that future batch request.
+const BATCH_MODE_INSTRUCTIONS = `You will classify multiple independent emails in a single request. Each email in EMAILS_JSON below carries its own "emailId".
+
+These emails are independent classification tasks:
+- Analyze and classify each email using only that email's own content.
+- Never let the content of one email change the classification of another email.
+- Return exactly one result per input emailId in "results"; the array order does not need to match the input order.
+- Do not invent an emailId that was not in the input, and do not omit, merge, or split any input email.`;
+
+const BATCH_SCHEMA_HINT = `Return a JSON object with this exact shape:
+{
+  "results": [
+    {
+      "emailId": "must exactly match one of the input emailId values",
+      "category": "action" | "fyi" | "course" | "admin" | "junk",
+      "summary": "exactly one compact sentence with concrete context",
+      "attentionPoints": ["zero to three concise factual points worth noticing"],
+      "suggestedActions": ["zero to three concise actions justified by the email"],
+      "importance": integer 0-100,
+      "confidence": number 0-1,
+      "reason": "short factual reason"
+    }
+  ]
+}`;
+
 export function createOpenAICompatibleClassifier(
   config: AppConfig,
   summaryLanguage: string | null = null
@@ -116,13 +143,24 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function buildSystemPrompt(rulesPath: string, summaryLanguage: string | null): string {
+function buildSystemPrompt(
+  rulesPath: string,
+  summaryLanguage: string | null,
+  schemaHint: string = SCHEMA_HINT,
+  modeInstructions?: string
+): string {
   const languageInstruction = summaryLanguageInstruction(summaryLanguage);
-  const base = [prompt, SCHEMA_HINT, languageInstruction].filter(Boolean).join('\n\n');
+  const base = [prompt, modeInstructions, schemaHint, languageInstruction].filter(Boolean).join('\n\n');
   const rules = loadUserRules(rulesPath);
   if (!rules) return base;
 
   return `${base}\n\nUSER RULES (highest priority — when these conflict with the general guidance above, follow the user rules). These are written by the inbox owner in natural language:\n${rules}`;
+}
+
+// Not called from classifyBatch yet — see the BATCH_MODE_INSTRUCTIONS comment
+// above. Exported so the batch prompt shape can be unit tested ahead of that.
+export function buildBatchSystemPrompt(rulesPath: string, summaryLanguage: string | null): string {
+  return buildSystemPrompt(rulesPath, summaryLanguage, BATCH_SCHEMA_HINT, BATCH_MODE_INSTRUCTIONS);
 }
 
 function loadUserRules(rulesPath: string): string {
@@ -132,4 +170,11 @@ function loadUserRules(rulesPath: string): string {
 
 function buildUserContent(email: EmailMessage): string {
   return `EMAIL_JSON:\n${JSON.stringify(buildEmailPayload(email), null, 2)}`;
+}
+
+// Not called from classifyBatch yet; see the BATCH_MODE_INSTRUCTIONS comment
+// above for why this is prepared ahead of the real batched LLM call.
+export function buildBatchUserContent(emails: EmailMessage[]): string {
+  const payloads = emails.map((email) => ({ emailId: email.id, ...buildEmailPayload(email) }));
+  return `EMAILS_JSON:\n${JSON.stringify(payloads, null, 2)}`;
 }
