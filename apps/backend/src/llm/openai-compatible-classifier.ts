@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import OpenAI from 'openai';
 import type { ChatCompletion } from 'openai/resources/chat/completions';
-import type { gmail_v1 } from 'googleapis';
+import { buildEmailPayload } from '../classification-batch.js';
 import { classifyBatchSequentially, classifyEmail, normalizeClassification } from '../classifier.js';
 import { summaryLanguageInstruction } from '../summary-language.js';
 import type { AppConfig, Classification, EmailClassifier, EmailMessage, LlmClassifierConfig } from '../types.js';
@@ -131,23 +131,5 @@ function loadUserRules(rulesPath: string): string {
 }
 
 function buildUserContent(email: EmailMessage): string {
-  const payload = {
-    from: email.from,
-    subject: email.subject,
-    date: email.date?.toISOString?.() || null,
-    headers: pickHeaders(email.headers),
-    snippet: email.snippet,
-    text: email.text.slice(0, 6000)
-  };
-
-  return `EMAIL_JSON:\n${JSON.stringify(payload, null, 2)}`;
-}
-
-function pickHeaders(headers: gmail_v1.Schema$MessagePartHeader[]) {
-  const keep = new Set(['From', 'Subject', 'Date', 'List-Unsubscribe', 'Precedence', 'Auto-Submitted']);
-  return headers
-    .filter((header): header is gmail_v1.Schema$MessagePartHeader & { name: string } => (
-      typeof header.name === 'string' && keep.has(header.name)
-    ))
-    .map((header) => ({ name: header.name, value: header.value }));
+  return `EMAIL_JSON:\n${JSON.stringify(buildEmailPayload(email), null, 2)}`;
 }
