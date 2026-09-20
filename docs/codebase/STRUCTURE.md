@@ -29,7 +29,7 @@ as an npm workspace.
   - `apps/backend/scripts/cleanup.ts`;
   - `apps/backend/scripts/deepseek-probe.ts`;
   - `apps/backend/scripts/preview-dry-run.ts`.
-- Test entry points are the six co-located `*.test.ts` scripts selected
+- Test entry points are the seven co-located `*.test.ts` scripts selected
   explicitly by the root `test` script.
 
 ### 3) Module Boundaries

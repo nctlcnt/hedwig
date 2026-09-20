@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
+import { migrateFollowupStore } from './followup-store.js';
 import { buildGmailMessageUrl } from './gmail-url.js';
 import type {
   AppConfig,
@@ -479,6 +480,7 @@ function migrate(db: HedwigDb): void {
   addColumnIfMissing(db, 'message_classifications', 'suggested_actions_json', "text not null default '[]'");
   migrateProcessingOutcome(db);
   backfillProcessedAt(db);
+  migrateFollowupStore(db);
   deleteExpiredEmailBodyCache(db);
 }
 

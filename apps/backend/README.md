@@ -44,7 +44,11 @@ daemon does not require or validate `DISCORD_FOLLOWUP_FORUM_CHANNEL_ID`. With
 `FOLLOWUP_ENABLED=true`, that ID is required and the daemon checks after Discord
 login that the bot can access a `GuildForum` channel there. A missing,
 inaccessible, or non-Forum channel stops daemon startup before cron jobs are
-scheduled.
+scheduled. Email previews then expose Conversation, Todo, and Read later
+tracking buttons. Track reserves one SQLite record per Gmail thread, snapshots
+every locally known message in the thread, and creates one idempotent Forum
+post. Historical thread hydration, rolling summaries, Done, and reconcile are
+still pending.
 
 The cron path (`digest:daemon` and `digest:once`) discovers new inbox mail incrementally via the Gmail History API cursor; only the bootstrap/recovery scan is bounded by `GMAIL_LOOKBACK_HOURS`.
 
@@ -53,6 +57,7 @@ The cron path (`digest:daemon` and `digest:once`) discovers new inbox mail incre
 ```bash
 npm run probe:deepseek         # synthetic classification, asserts provider=deepseek
 npm run dry-run:preview        # synthetic Discord preview backed by SQLite
+npm run dry-run:followup       # three synthetic Conversation/Todo/Read later scenarios
 npm run cleanup                # delete expired SQLite body/link cache rows
 ```
 

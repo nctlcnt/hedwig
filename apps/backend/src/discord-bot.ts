@@ -1,18 +1,30 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
   Client,
   EmbedBuilder,
   GatewayIntentBits,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
   type InteractionReplyOptions
 } from 'discord.js';
 import { getCachedEmailPreview, setSummaryLanguage, type HedwigDb } from './db.js';
 import { validateFollowupForumChannel } from './followup-config.js';
+import {
+  openFollowup,
+  type FollowupForumDraft,
+  type OpenFollowupResult
+} from './followup-service.js';
+import type { FollowupKind } from './followup-store.js';
 import { MAX_SUMMARY_LANGUAGE_LENGTH, normalizeSummaryLanguage } from './summary-language.js';
 import type { AppConfig, CachedEmailPreview } from './types.js';
 
 const PREVIEW_BUTTON_PREFIX = 'email_preview:';
+const FOLLOWUP_BUTTON_PREFIX = 'followup:create:';
 const SUMMARY_LANGUAGE_COMMAND = 'summary-language';
 const SUMMARY_LANGUAGE_OPTION = 'language';
 const summaryLanguageCommand = new SlashCommandBuilder()
@@ -38,10 +50,14 @@ export async function startDiscordBot(config: AppConfig, db: HedwigDb): Promise<
       return;
     }
     if (!interaction.isButton()) return;
-    if (!interaction.customId.startsWith(PREVIEW_BUTTON_PREFIX)) return;
-
-    const mailId = interaction.customId.slice(PREVIEW_BUTTON_PREFIX.length);
-    await interaction.reply(previewReply(db, mailId));
+    if (interaction.customId.startsWith(PREVIEW_BUTTON_PREFIX)) {
+      const mailId = interaction.customId.slice(PREVIEW_BUTTON_PREFIX.length);
+      await interaction.reply(previewReply(config, db, mailId));
+      return;
+    }
+    if (interaction.customId.startsWith(FOLLOWUP_BUTTON_PREFIX)) {
+      await handleFollowupCreate(interaction, config, db);
+    }
   });
 
   const ready = new Promise<Client<true>>((resolve) => {
@@ -114,7 +130,7 @@ async function handleSummaryLanguageCommand(
   }
 }
 
-function previewReply(db: HedwigDb, mailId: string): InteractionReplyOptions {
+function previewReply(config: AppConfig, db: HedwigDb, mailId: string): InteractionReplyOptions {
   const preview = getCachedEmailPreview(db, mailId);
   if (!preview) {
     return {
@@ -125,8 +141,196 @@ function previewReply(db: HedwigDb, mailId: string): InteractionReplyOptions {
 
   return {
     ephemeral: true,
-    embeds: [previewEmbed(preview)]
+    embeds: [previewEmbed(preview)],
+    components: config.followup.enabled ? followupTypeRows(mailId) : []
   };
+}
+
+async function handleFollowupCreate(
+  interaction: ButtonInteraction,
+  config: AppConfig,
+  db: HedwigDb
+): Promise<void> {
+  if (!config.followup.enabled) {
+    await interaction.reply({
+      ephemeral: true,
+      content: 'Follow-up is currently disabled.'
+    });
+    return;
+  }
+
+  const parsed = parseFollowupButton(interaction.customId);
+  if (!parsed) {
+    await interaction.reply({
+      ephemeral: true,
+      content: 'This follow-up action is invalid.'
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  try {
+    const result = await openFollowup(
+      db,
+      parsed.source,
+      parsed.kind,
+      (draft) => publishFollowupForumPost(interaction, config, draft)
+    );
+    await interaction.editReply(followupResultMessage(result));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await interaction.editReply(`Could not create follow-up: ${message.slice(0, 1000)}`);
+  }
+}
+
+function followupTypeRows(mailId: string): ActionRowBuilder<ButtonBuilder>[] {
+  const buttons: Array<{ kind: FollowupKind; label: string; style: ButtonStyle }> = [
+    { kind: 'conversation', label: 'Follow up', style: ButtonStyle.Primary },
+    { kind: 'todo', label: 'Add todo', style: ButtonStyle.Secondary },
+    { kind: 'read_later', label: 'Read it later', style: ButtonStyle.Secondary }
+  ];
+  const customIds = buttons.map((button) => `${FOLLOWUP_BUTTON_PREFIX}${button.kind}:${mailId}`);
+  if (customIds.some((customId) => customId.length > 100)) return [];
+
+  return [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      buttons.map((button, index) => (
+        new ButtonBuilder()
+          .setCustomId(customIds[index] || '')
+          .setLabel(button.label)
+          .setStyle(button.style)
+      ))
+    )
+  ];
+}
+
+function parseFollowupButton(customId: string): {
+  kind: FollowupKind;
+  source: { accountId: string; gmailId: string };
+} | null {
+  if (!customId.startsWith(FOLLOWUP_BUTTON_PREFIX)) return null;
+  const payload = customId.slice(FOLLOWUP_BUTTON_PREFIX.length);
+  const kindSeparator = payload.indexOf(':');
+  if (kindSeparator <= 0) return null;
+  const kind = payload.slice(0, kindSeparator);
+  if (kind !== 'conversation' && kind !== 'todo' && kind !== 'read_later') return null;
+
+  const mailId = payload.slice(kindSeparator + 1);
+  const accountSeparator = mailId.indexOf(':');
+  if (accountSeparator <= 0 || accountSeparator === mailId.length - 1) return null;
+  return {
+    kind,
+    source: {
+      accountId: mailId.slice(0, accountSeparator),
+      gmailId: mailId.slice(accountSeparator + 1)
+    }
+  };
+}
+
+async function publishFollowupForumPost(
+  interaction: ButtonInteraction,
+  config: AppConfig,
+  draft: FollowupForumDraft
+): Promise<{ forumChannelId: string; threadId: string; messageId: string }> {
+  const channel = await interaction.client.channels.fetch(config.followup.forumChannelId);
+  if (!channel || channel.type !== ChannelType.GuildForum) {
+    throw new Error('Configured follow-up channel is not an accessible Forum');
+  }
+
+  const thread = await channel.threads.create({
+    name: followupThreadName(draft),
+    message: {
+      embeds: [followupForumEmbed(draft)],
+      allowedMentions: { parse: [] }
+    },
+    reason: `Hedwig follow-up ${draft.followup.id}`
+  });
+  return {
+    forumChannelId: channel.id,
+    threadId: thread.id,
+    // A Forum post's starter message shares the thread id.
+    messageId: thread.id
+  };
+}
+
+function followupThreadName(draft: FollowupForumDraft): string {
+  const prefix: Record<FollowupKind, string> = {
+    conversation: 'Follow up',
+    todo: 'Todo',
+    read_later: 'Read it later'
+  };
+  return `[${prefix[draft.followup.kind]}] ${draft.followup.title}`
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100);
+}
+
+function followupForumEmbed(draft: FollowupForumDraft): EmbedBuilder {
+  const source = draft.source;
+  const description = [
+    `**Type**\n${followupKindLabel(draft.followup.kind)}`,
+    source.summary ? `**Current summary**\n${escapeMarkdown(source.summary)}` : '',
+    detailList('Attention', source.attentionPoints),
+    detailList('Suggested actions', source.suggestedActions),
+    followupLinkBlock(source.links),
+    `[Open in Gmail](${source.gmailUrl})`
+  ].filter(Boolean).join('\n\n');
+
+  return new EmbedBuilder()
+    .setTitle(truncate(draft.followup.title || '(no subject)', 256))
+    .setDescription(truncate(description, 4000))
+    .setColor(followupColor(draft.followup.kind))
+    .setFooter({
+      text: `followup ${draft.followup.id} · ${draft.followup.accountId}:${draft.followup.gmailThreadId}`
+    });
+}
+
+function followupLinkBlock(links: Array<{ url: string; label?: string }>): string {
+  if (links.length === 0) return '';
+  return `**Useful links**\n${links.slice(0, 5).map((link, index) => (
+    `${index + 1}. [${escapeMarkdown(followupLinkLabel(link.url))}](${link.url})`
+  )).join('\n')}`;
+}
+
+function followupLinkLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const domain = parsed.hostname.replace(/^www\./, '').toLowerCase();
+    const path = parsed.pathname
+      .split('/')
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('/');
+    return path ? `Open ${domain}/${path}` : `Open ${domain}`;
+  } catch {
+    return url;
+  }
+}
+
+function followupColor(kind: FollowupKind): number {
+  if (kind === 'conversation') return 0x7c3aed;
+  if (kind === 'todo') return 0xdc2626;
+  return 0x2563eb;
+}
+
+function followupKindLabel(kind: FollowupKind): string {
+  if (kind === 'conversation') return 'Conversation';
+  if (kind === 'todo') return 'Todo';
+  return 'Read it later';
+}
+
+function followupResultMessage(result: OpenFollowupResult): string {
+  if (result.outcome === 'pending') {
+    return `This email thread's follow-up is being created.\nfollowup: \`${result.followup.id}\``;
+  }
+  const thread = result.followup.discordThreadId
+    ? `<#${result.followup.discordThreadId}>`
+    : `followup \`${result.followup.id}\``;
+  if (result.outcome === 'existing') {
+    const state = result.followup.state === 'closed' ? 'is already complete' : 'already exists';
+    return `This email thread's follow-up ${state}: ${thread}`;
+  }
+  return `Created ${followupKindLabel(result.followup.kind)}: ${thread}`;
 }
 
 function previewEmbed(preview: CachedEmailPreview): EmbedBuilder {

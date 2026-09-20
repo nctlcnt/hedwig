@@ -8,7 +8,7 @@
   `tsx`.
 - Assertion/mocking tools: Node `assert/strict`, in-memory SQLite and hand-built
   fake objects.
-- Verified on 2026-07-25: all six test scripts passed and `tsc --noEmit`
+- Verified on 2026-07-25: all seven test scripts passed and `tsc --noEmit`
   completed successfully.
 
 ```bash
@@ -26,7 +26,8 @@ There are no separate unit, integration, E2E or coverage commands.
   - `apps/backend/src/digest.test.ts`;
   - `apps/backend/src/gmail.test.ts`;
   - `apps/backend/src/summary-language.test.ts`;
-  - `apps/backend/src/followup-config.test.ts`.
+  - `apps/backend/src/followup-config.test.ts`;
+  - `apps/backend/src/followup-store.test.ts`.
 - The root `test` script executes these files sequentially in a fixed list.
 - There are no global setup/teardown files or fixture directories.
 
@@ -51,7 +52,9 @@ Current assertions cover:
 - multi-page Gmail History aggregation;
 - Unicode-safe summary-language validation, prompt hardening and SQLite setting
   persistence;
-- disabled/enabled follow-up configuration and Discord Forum validation.
+- disabled/enabled follow-up configuration and Discord Forum validation;
+- three follow-up kinds, thread-level idempotency, local thread snapshots,
+  Forum creation retries and close-state idempotency.
 
 ### 4) Mocking and Isolation Strategy
 
@@ -84,6 +87,7 @@ Current assertions cover:
 - `apps/backend/src/classifier.test.ts`
 - `apps/backend/src/digest.test.ts`
 - `apps/backend/src/followup-config.test.ts`
+- `apps/backend/src/followup-store.test.ts`
 - `apps/backend/src/gmail.test.ts`
 - `apps/backend/src/summary-language.test.ts`
 - `tsconfig.json`

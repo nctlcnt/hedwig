@@ -97,7 +97,7 @@ from SQLite and never connects to Gmail.
 | Structured preview guidance | Implemented with one-sentence summaries plus up to three attention points and suggested actions | Added directly from user feedback | Stored with each new classification; historical rows use empty lists |
 | Debug-channel deduplicated alerts | Implemented with `alert_log` | Project says live | Schema is live after the restart; no alert rows or new processing failures were observed during verification |
 | Read-only Gmail boundary | Implemented in source under LT-152 | LT-152 In Progress pending live verification | Mutation methods and mailbox cleanup/backfill paths removed; OAuth setup requests `gmail.readonly` |
-| Full Track/forum follow-up lifecycle | Not implemented | LT-124 Backlog, next queue | Not active |
+| Track/forum follow-up creation | Implemented behind `FOLLOWUP_ENABLED` | LT-124 in progress | Conversation hydration, rolling summaries, Done and reconcile remain pending |
 | Query interface | Not implemented | LT-69 Backlog | Not active |
 | Calendar/event extraction and write | Not implemented | LT-54/LT-60 were rewritten to the current architecture and marked `paused`; LT-56/LT-62 remain deferred | Not active |
 | Frontend/admin UI | Placeholder only | No active delivery | Not active |

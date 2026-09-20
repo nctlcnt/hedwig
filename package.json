@@ -9,8 +9,9 @@
     "digest:daemon": "tsx apps/backend/src/index.ts daemon",
     "probe:deepseek": "tsx apps/backend/scripts/deepseek-probe.ts",
     "dry-run:preview": "tsx apps/backend/scripts/preview-dry-run.ts",
+    "dry-run:followup": "tsx apps/backend/scripts/followup-dry-run.ts",
     "cleanup": "tsx apps/backend/scripts/cleanup.ts",
-    "test": "tsx apps/backend/src/db.test.ts && tsx apps/backend/src/classifier.test.ts && tsx apps/backend/src/digest.test.ts && tsx apps/backend/src/gmail.test.ts && tsx apps/backend/src/summary-language.test.ts && tsx apps/backend/src/followup-config.test.ts",
+    "test": "tsx apps/backend/src/db.test.ts && tsx apps/backend/src/classifier.test.ts && tsx apps/backend/src/digest.test.ts && tsx apps/backend/src/gmail.test.ts && tsx apps/backend/src/summary-language.test.ts && tsx apps/backend/src/followup-config.test.ts && tsx apps/backend/src/followup-store.test.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {
