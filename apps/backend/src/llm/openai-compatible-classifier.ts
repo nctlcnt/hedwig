@@ -2,9 +2,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import OpenAI from 'openai';
 import type { ChatCompletion } from 'openai/resources/chat/completions';
 import type { gmail_v1 } from 'googleapis';
-import { classifyEmail, normalizeClassification } from '../classifier.js';
+import { classifyBatchSequentially, classifyEmail, normalizeClassification } from '../classifier.js';
 import { summaryLanguageInstruction } from '../summary-language.js';
-import type { AppConfig, EmailClassifier, EmailMessage, LlmClassifierConfig } from '../types.js';
+import type { AppConfig, Classification, EmailClassifier, EmailMessage, LlmClassifierConfig } from '../types.js';
 
 const prompt = readFileSync(new URL('../../prompts/email-classifier.md', import.meta.url), 'utf8');
 
@@ -37,33 +37,38 @@ export function createOpenAICompatibleClassifier(
     ? createSingleLlmClassifier(config.classifier.fallbackLlm, systemPrompt, clientOptions)
     : null;
 
-  return {
-    async classify(email: EmailMessage) {
-      const failures: string[] = [];
+  async function classify(email: EmailMessage): Promise<Classification> {
+    const failures: string[] = [];
+    try {
+      return await primary.classify(email);
+    } catch (error) {
+      const message = `${config.classifier.llm.providerName} failed: ${errorMessage(error)}`;
+      failures.push(message);
+      console.warn(`${message}; ${fallback ? 'trying fallback classifier' : 'falling back to rules'}`);
+    }
+
+    if (fallback && config.classifier.fallbackLlm) {
       try {
-        return await primary.classify(email);
+        return await fallback.classify(email);
       } catch (error) {
-        const message = `${config.classifier.llm.providerName} failed: ${errorMessage(error)}`;
+        const message = `${config.classifier.fallbackLlm.providerName} failed: ${errorMessage(error)}`;
         failures.push(message);
-        console.warn(`${message}; ${fallback ? 'trying fallback classifier' : 'falling back to rules'}`);
+        console.warn(`${message}; falling back to rules`);
       }
+    }
 
-      if (fallback && config.classifier.fallbackLlm) {
-        try {
-          return await fallback.classify(email);
-        } catch (error) {
-          const message = `${config.classifier.fallbackLlm.providerName} failed: ${errorMessage(error)}`;
-          failures.push(message);
-          console.warn(`${message}; falling back to rules`);
-        }
-      }
+    const ruled = classifyEmail(email);
+    return {
+      ...ruled,
+      provider: 'rule-fallback',
+      reason: failures.join(' | ')
+    };
+  }
 
-      const ruled = classifyEmail(email);
-      return {
-        ...ruled,
-        provider: 'rule-fallback',
-        reason: failures.join(' | ')
-      };
+  return {
+    classify,
+    classifyBatch(emails: EmailMessage[]) {
+      return classifyBatchSequentially(classify, emails);
     }
   };
 }
@@ -82,22 +87,27 @@ function createSingleLlmClassifier(
     timeout: clientOptions.timeout
   });
 
-  return {
-    async classify(email: EmailMessage) {
-      const completion = (await client.chat.completions.create({
-        model: llm.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: buildUserContent(email) }
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.2,
-        stream: false
-      } as Parameters<typeof client.chat.completions.create>[0])) as ChatCompletion;
+  async function classify(email: EmailMessage): Promise<Classification> {
+    const completion = (await client.chat.completions.create({
+      model: llm.model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: buildUserContent(email) }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      stream: false
+    } as Parameters<typeof client.chat.completions.create>[0])) as ChatCompletion;
 
-      const text = completion.choices[0]?.message?.content || '{}';
-      const parsed = JSON.parse(text);
-      return normalizeClassification(email, parsed, llm.providerName);
+    const text = completion.choices[0]?.message?.content || '{}';
+    const parsed = JSON.parse(text);
+    return normalizeClassification(email, parsed, llm.providerName);
+  }
+
+  return {
+    classify,
+    classifyBatch(emails: EmailMessage[]) {
+      return classifyBatchSequentially(classify, emails);
     }
   };
 }

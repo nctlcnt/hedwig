@@ -164,6 +164,14 @@ export type DigestReport = {
   sections: DigestSection[];
 };
 
+export type BatchClassificationResult = {
+  emailId: string;
+  classification: Classification;
+};
+
 export type EmailClassifier = {
   classify(email: EmailMessage): Promise<Classification>;
+  // First version calls classify() once per email; a real batched LLM call
+  // lands in a later micro-batch step (see docs/micro-batch.md).
+  classifyBatch(emails: EmailMessage[]): Promise<BatchClassificationResult[]>;
 };
