@@ -127,6 +127,37 @@ assert.deepEqual(legacyPreview.links, [
   { url: 'https://example.com/b', label: '打开 example.com/b' }
 ]);
 
+// Re-classifying the same email (a batch retry or single-item fallback)
+// upserts instead of appending: only one row survives per (account_id,
+// gmail_id), refreshed with the new run_id and fields, while created_at
+// keeps the original classification time.
+const firstClassificationRow = db.prepare(`
+  select created_at as createdAt from message_classifications
+  where account_id = 'primary' and gmail_id = 'gmail-1'
+`).get() as { createdAt: string };
+
+const retryRunId = createDigestRun(db, email.accountId, email.accountEmail, new Date());
+saveClassification(db, retryRunId, email, {
+  category: 'fyi',
+  importance: 20,
+  summary: 'Updated summary after retry.',
+  attentionPoints: [],
+  suggestedActions: [],
+  confidence: 0.4,
+  provider: 'test-retry'
+}, 'digest_only');
+
+const rowsForEmail = db.prepare(`
+  select run_id as runId, category, summary, created_at as createdAt
+  from message_classifications
+  where account_id = 'primary' and gmail_id = 'gmail-1'
+`).all() as Array<{ runId: number; category: string; summary: string; createdAt: string }>;
+assert.equal(rowsForEmail.length, 1);
+assert.equal(rowsForEmail[0]?.runId, retryRunId);
+assert.equal(rowsForEmail[0]?.category, 'fyi');
+assert.equal(rowsForEmail[0]?.summary, 'Updated summary after retry.');
+assert.equal(rowsForEmail[0]?.createdAt, firstClassificationRow.createdAt);
+
 const cleanupDb = openDatabase(config);
 const classificationColumns = cleanupDb.prepare('pragma table_info(message_classifications)').all()
   .map((row) => (row as { name: string }).name);
@@ -273,6 +304,14 @@ try {
       1, 'primary', 'legacy-junk', 'junk', 'legacy junk', 1, 1,
       'test', '', 'archive', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
     );
+    insert into message_classifications (
+      id, run_id, account_id, gmail_id, category, summary, importance, confidence,
+      provider, reason, processed_as, processed_at, created_at
+    ) values
+      (2, 1, 'primary', 'legacy-dup', 'admin', 'first classification', 10, 0.6,
+       'test', '', 'digest_only', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'),
+      (3, 1, 'primary', 'legacy-dup', 'fyi', 'retried classification', 5, 0.4,
+       'test-retry', '', 'digest_only', '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z');
   `);
   legacyDb.close();
 
@@ -290,6 +329,24 @@ try {
     where gmail_id = 'legacy-junk'
   `).get() as { processingOutcome: string };
   assert.equal(migrated.processingOutcome, 'suppress');
+
+  // A database that predates the unique constraint may hold more than one
+  // classification row for the same (account_id, gmail_id). Migration must
+  // add the constraint and keep only the latest (highest id) row per email.
+  const dedupedRows = migratedDb.prepare(`
+    select id, category, summary
+    from message_classifications
+    where account_id = 'primary' and gmail_id = 'legacy-dup'
+  `).all() as Array<{ id: number; category: string; summary: string }>;
+  assert.equal(dedupedRows.length, 1);
+  assert.equal(dedupedRows[0]?.id, 3);
+  assert.equal(dedupedRows[0]?.category, 'fyi');
+  assert.equal(dedupedRows[0]?.summary, 'retried classification');
+
+  const classificationIndexes = migratedDb.prepare('pragma index_list(message_classifications)').all() as
+    Array<{ unique: number }>;
+  assert.ok(classificationIndexes.some((index) => index.unique === 1));
+
   migratedDb.close();
 } finally {
   rmSync(migrationDir, { recursive: true, force: true });
