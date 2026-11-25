@@ -1,4 +1,4 @@
-import type { Category, Classification, EmailMessage } from './types.js';
+import type { BatchClassificationResult, Category, Classification, EmailMessage } from './types.js';
 
 const CATEGORIES = {
   action: {
@@ -233,6 +233,21 @@ export function normalizeClassification(
     reason: typeof classification.reason === 'string' ? classification.reason.slice(0, 240) : '',
     provider
   };
+}
+
+// First-version classifyBatch: classify each email independently through the
+// given single-email classify function, preserving the emailId association
+// the batch API contract requires. Later steps replace the body with a real
+// batched LLM call; every EmailClassifier can keep using this wrapper.
+export async function classifyBatchSequentially(
+  classify: (email: EmailMessage) => Classification | Promise<Classification>,
+  emails: EmailMessage[]
+): Promise<BatchClassificationResult[]> {
+  const results: BatchClassificationResult[] = [];
+  for (const email of emails) {
+    results.push({ emailId: email.id, classification: await classify(email) });
+  }
+  return results;
 }
 
 function normalizeDetailList(value: unknown): string[] {

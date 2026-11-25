@@ -109,6 +109,10 @@ export function saveEmailBodyCache(db: HedwigDb, email: EmailMessage): void {
   );
 }
 
+// Idempotent by (account_id, gmail_id): a batch retry or single-item fallback
+// that re-classifies the same email refreshes this row instead of inserting a
+// second one. created_at is left untouched on conflict (first classification
+// time); processed_at and run_id move to whichever attempt last wrote it.
 export function saveClassification(
   db: HedwigDb,
   runId: number,
@@ -123,6 +127,18 @@ export function saveClassification(
       processing_outcome, processed_at, created_at
     )
     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    on conflict(account_id, gmail_id) do update set
+      run_id = excluded.run_id,
+      category = excluded.category,
+      summary = excluded.summary,
+      attention_points_json = excluded.attention_points_json,
+      suggested_actions_json = excluded.suggested_actions_json,
+      importance = excluded.importance,
+      confidence = excluded.confidence,
+      provider = excluded.provider,
+      reason = excluded.reason,
+      processing_outcome = excluded.processing_outcome,
+      processed_at = excluded.processed_at
   `).run(
     runId,
     email.accountId,
@@ -421,7 +437,8 @@ function migrate(db: HedwigDb): void {
       processing_outcome text not null default 'digest_only'
         check (processing_outcome in ('suppress', 'digest_only', 'push_now')),
       processed_at text not null default CURRENT_TIMESTAMP,
-      created_at text not null
+      created_at text not null,
+      unique (account_id, gmail_id)
     );
 
     create table if not exists email_body_cache (
@@ -466,9 +483,6 @@ function migrate(db: HedwigDb): void {
     create index if not exists idx_message_classifications_run_id
       on message_classifications(run_id);
 
-    create index if not exists idx_message_classifications_gmail_id
-      on message_classifications(account_id, gmail_id);
-
     create index if not exists idx_email_body_cache_expires_at
       on email_body_cache(expires_at);
   `);
@@ -480,6 +494,7 @@ function migrate(db: HedwigDb): void {
   addColumnIfMissing(db, 'message_classifications', 'suggested_actions_json', "text not null default '[]'");
   migrateProcessingOutcome(db);
   backfillProcessedAt(db);
+  migrateMessageClassificationsUniqueConstraint(db);
   migrateFollowupStore(db);
   deleteExpiredEmailBodyCache(db);
 }
@@ -855,6 +870,74 @@ function migrateProcessingOutcome(db: HedwigDb): void {
   }
 }
 
+// Older databases allowed multiple classification rows per (account_id,
+// gmail_id): saveClassification was a plain insert, and nothing stopped a
+// retried classification from adding a second row for the same email. This
+// rebuilds the table with a unique constraint so saveClassification's upsert
+// can rely on it, keeping only the most recent row (highest id) per email for
+// any pair that already had duplicates.
+function migrateMessageClassificationsUniqueConstraint(db: HedwigDb): void {
+  if (hasUniqueIndexOn(db, 'message_classifications', ['account_id', 'gmail_id'])) return;
+
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.exec(`
+      begin;
+
+      alter table message_classifications rename to message_classifications_legacy_pre_unique;
+      drop index if exists idx_message_classifications_gmail_id;
+
+      create table message_classifications (
+        id integer primary key autoincrement,
+        run_id integer not null references digest_runs(id) on delete cascade,
+        account_id text not null default 'primary',
+        gmail_id text not null,
+        category text not null check (category in ('action', 'fyi', 'course', 'admin', 'junk')),
+        summary text not null,
+        attention_points_json text not null default '[]',
+        suggested_actions_json text not null default '[]',
+        importance integer not null,
+        confidence real not null,
+        provider text not null,
+        reason text not null default '',
+        processing_outcome text not null default 'digest_only'
+          check (processing_outcome in ('suppress', 'digest_only', 'push_now')),
+        processed_at text not null default CURRENT_TIMESTAMP,
+        created_at text not null,
+        unique (account_id, gmail_id)
+      );
+
+      insert into message_classifications (
+        id, run_id, account_id, gmail_id, category, summary, attention_points_json,
+        suggested_actions_json, importance, confidence, provider, reason,
+        processing_outcome, processed_at, created_at
+      )
+      select
+        id, run_id, account_id, gmail_id, category, summary, attention_points_json,
+        suggested_actions_json, importance, confidence, provider, reason,
+        processing_outcome, processed_at, created_at
+      from message_classifications_legacy_pre_unique
+      where id in (
+        select max(id)
+        from message_classifications_legacy_pre_unique
+        group by account_id, gmail_id
+      );
+
+      drop table message_classifications_legacy_pre_unique;
+
+      create index if not exists idx_message_classifications_run_id
+        on message_classifications(run_id);
+
+      commit;
+    `);
+  } catch (error) {
+    db.exec('rollback;');
+    throw error;
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+}
+
 function addColumnIfMissing(db: HedwigDb, table: string, column: string, definition: string): void {
   if (tableColumns(db, table).includes(column)) return;
   db.exec(`alter table ${table} add column ${column} ${definition};`);
@@ -872,6 +955,16 @@ function backfillProcessedAt(db: HedwigDb): void {
 function tableColumns(db: HedwigDb, table: string): string[] {
   return db.prepare(`pragma table_info(${table})`).all()
     .map((row) => (row as { name: string }).name);
+}
+
+function hasUniqueIndexOn(db: HedwigDb, table: string, columns: string[]): boolean {
+  const indexes = db.prepare(`pragma index_list(${table})`).all() as Array<{ name: string; unique: number }>;
+  return indexes.some((index) => {
+    if (!index.unique) return false;
+    const indexColumns = (db.prepare(`pragma index_info(${index.name})`).all() as Array<{ name: string }>)
+      .map((row) => row.name);
+    return indexColumns.length === columns.length && indexColumns.every((name, i) => name === columns[i]);
+  });
 }
 
 function errorMessage(error: unknown): string {

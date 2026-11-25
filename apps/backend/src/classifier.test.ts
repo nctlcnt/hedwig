@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { classifyEmail, isVerificationCode, normalizeClassification } from './classifier.js';
-import type { EmailMessage } from './types.js';
+import { classifyBatchSequentially, classifyEmail, isVerificationCode, normalizeClassification } from './classifier.js';
+import type { Classification, EmailMessage } from './types.js';
 
 function email(overrides: Partial<EmailMessage>): EmailMessage {
   return {
@@ -61,5 +61,27 @@ assert.deepEqual(
     .attentionPoints,
   []
 );
+
+// classifyBatchSequentially: this micro-batch step's classifyBatch is still
+// one classify() call per email; it must preserve the emailId <-> result
+// association without relying on array order or count.
+{
+  const emails = [
+    email({ id: 'a', subject: 'Assignment due Friday' }),
+    email({ id: 'b', subject: '581167 is your code' }),
+    email({ id: 'c', subject: 'Newsletter' })
+  ];
+  const results = await classifyBatchSequentially(classifyEmail, emails);
+  assert.deepEqual(results.map((result) => result.emailId), ['a', 'b', 'c']);
+  assert.equal(results.find((result) => result.emailId === 'b')?.classification.category, 'junk');
+
+  const empty = await classifyBatchSequentially(classifyEmail, []);
+  assert.deepEqual(empty, []);
+
+  // Works with an async classify function too (the LLM classifiers use one).
+  const asyncClassify = async (target: EmailMessage): Promise<Classification> => classifyEmail(target);
+  const asyncResults = await classifyBatchSequentially(asyncClassify, emails);
+  assert.deepEqual(asyncResults.map((result) => result.emailId), ['a', 'b', 'c']);
+}
 
 console.log('classifier.test.ts: all assertions passed');

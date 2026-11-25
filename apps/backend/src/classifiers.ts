@@ -1,4 +1,4 @@
-import { classifyEmail } from './classifier.js';
+import { classifyBatchSequentially, classifyEmail } from './classifier.js';
 import { createOpenAICompatibleClassifier } from './llm/openai-compatible-classifier.js';
 import type { AppConfig, EmailClassifier } from './types.js';
 
@@ -14,6 +14,9 @@ export function createClassifier(config: AppConfig, summaryLanguage: string | nu
   return {
     async classify(email) {
       return classifyEmail(email);
+    },
+    classifyBatch(emails) {
+      return classifyBatchSequentially(classifyEmail, emails);
     }
   };
 }
