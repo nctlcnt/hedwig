@@ -19,21 +19,19 @@ import {
 import type { AppConfig, Classification, EmailMessage } from './types.js';
 
 const config: AppConfig = {
-  messagingProvider: 'discord',
   google: {
     clientId: '',
     clientSecret: '',
     redirectUri: '',
     accounts: []
   },
-  discord: {
+  telegram: {
     botToken: '',
-    digestChannelId: '',
-    realtimeChannelId: '',
-    debugChannelId: '',
+    ownerUserId: 1,
+    chatId: 1,
+    debugChatId: null,
     debugCooldownMs: 60 * 60 * 1000
   },
-  followup: { enabled: false, forumChannelId: '' },
   digest: {
     timezone: 'UTC',
     cron: '0 19 * * *',
@@ -351,6 +349,36 @@ try {
   migratedDb.close();
 } finally {
   rmSync(migrationDir, { recursive: true, force: true });
+}
+
+// Follow-up support was removed, but databases created before that keep their
+// follow-up history: opening them must neither fail nor drop those tables.
+const legacyDir = mkdtempSync(join(tmpdir(), 'hedwig-legacy-followups-'));
+try {
+  const legacyPath = join(legacyDir, 'legacy.db');
+  const legacy = new Database(legacyPath);
+  legacy.exec(`
+    create table followups (id integer primary key autoincrement, title text not null);
+    create table followup_messages (followup_id integer not null references followups(id), gmail_id text not null);
+    insert into followups (title) values ('kept 1'), ('kept 2');
+    insert into followup_messages (followup_id, gmail_id) values (1, 'g1'), (2, 'g2'), (2, 'g3');
+  `);
+  legacy.close();
+
+  const reopened = openDatabase({ ...config, database: { path: legacyPath } });
+  const count = (table: string): number =>
+    (reopened.prepare(`select count(*) as n from ${table}`).get() as { n: number }).n;
+  assert.equal(count('followups'), 2);
+  assert.equal(count('followup_messages'), 3);
+  reopened.close();
+
+  // A fresh database no longer gets follow-up tables.
+  const fresh = openDatabase({ ...config, database: { path: join(legacyDir, 'fresh.db') } });
+  const freshTables = fresh.prepare(`select name from sqlite_master where type = 'table' and name like 'followup%'`).all();
+  assert.deepEqual(freshTables, []);
+  fresh.close();
+} finally {
+  rmSync(legacyDir, { recursive: true, force: true });
 }
 
 console.log('db.test.ts: all assertions passed');

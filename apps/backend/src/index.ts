@@ -3,10 +3,8 @@ import { reportProblem, problemMessage } from './alerts.js';
 import { loadConfig } from './config.js';
 import { processUnreadMail, queueTodayDigest, runDailyDigest } from './digest.js';
 import { openDatabase, type HedwigDb } from './db.js';
-import { startDiscordBot } from './discord-bot.js';
 import { createGmailMailGateway } from './gateway/gmail-mail-gateway.js';
 import type { MailGateway } from './gateway/mail-gateway.js';
-import { createDiscordNotifier } from './notifications/discord-notifier.js';
 import type { Notifier } from './notifications/notifier.js';
 import { createOutboxDrain } from './notifications/outbox-worker.js';
 import { createTelegramNotifier } from './notifications/telegram-notifier.js';
@@ -34,18 +32,6 @@ async function main(): Promise<void> {
   let daemonStarted = false;
 
   try {
-    if (config.messagingProvider === 'discord') {
-      const notifier = createDiscordNotifier(config);
-      if (mode === 'once') {
-        await runOnce(config, db, mailGateway, notifier);
-      } else {
-        await startDiscordBot(config, db);
-        scheduleDaemon(config, db, mailGateway, notifier);
-        daemonStarted = true;
-      }
-      return;
-    }
-
     const api = createTelegramApi(config.telegram.botToken);
     const bot = await telegramRequest('getMe', () => api.getMe());
     await validateTelegramDebugChat(api, config.telegram.debugChatId);
@@ -114,14 +100,15 @@ function scheduleDaemon(
   notifier: Notifier,
   wakeOutbox = createOutboxWake(db, notifier)
 ): () => void {
-  function reportCronFailure(job: string, title: string, error: unknown): Promise<void> {
-    const detail = config.messagingProvider === 'telegram' ? title : problemMessage(error);
-    console.error(title, detail);
+  // The raw error can carry tokens or mail content, so neither the log nor the
+  // alert includes it; only the job title is reported.
+  function reportCronFailure(job: string, title: string): Promise<void> {
+    console.error(title);
     return reportProblem(notifier, db, {
       kind: 'job-failure',
-      signature: `cron:${job}|${detail.slice(0, 120)}`,
+      signature: `cron:${job}|${title.slice(0, 120)}`,
       title,
-      detail
+      detail: title
     });
   }
 
@@ -129,7 +116,7 @@ function scheduleDaemon(
   const processJob = cron.schedule(
     config.digest.processCron,
     () => processUnreadMail(config, db, mailGateway, notifier)
-      .catch((error) => reportCronFailure('process', '定时处理任务异常', error)),
+      .catch(() => reportCronFailure('process', '定时处理任务异常')),
     { timezone: config.digest.timezone }
   );
 
@@ -137,7 +124,7 @@ function scheduleDaemon(
   const digestJob = cron.schedule(
     config.digest.cron,
     () => queueTodayDigest(config, db, notifier)
-      .catch((error) => reportCronFailure('digest', '定时摘要任务异常', error)),
+      .catch(() => reportCronFailure('digest', '定时摘要任务异常')),
     { timezone: config.digest.timezone }
   );
 

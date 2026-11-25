@@ -13,14 +13,13 @@ import { DeliveryError } from '../notifications/notifier.js';
 import { enqueueNotification } from '../notifications/outbox-store.js';
 import { createOutboxDrain } from '../notifications/outbox-worker.js';
 import { createTelegramNotifier } from '../notifications/telegram-notifier.js';
-import type { DigestItem, EmailMessage, TelegramAppConfig } from '../types.js';
+import type { DigestItem, EmailMessage, AppConfig } from '../types.js';
 import { createTelegramApi, telegramRequest, validateTelegramDebugChat, type TelegramApi } from './api.js';
 import { startTelegramPolling } from './poller.js';
 import { isTelegramChatReady, telegramOffset } from './store.js';
 
 const directory = mkdtempSync(join(tmpdir(), 'hedwig-telegram-'));
 const config = {
-  messagingProvider: 'telegram',
   database: { path: join(directory, 'test.db') },
   digest: { timezone: 'Australia/Sydney' },
   google: { accounts: [
@@ -28,7 +27,7 @@ const config = {
     { id: 'study', displayName: '学校', refreshToken: 'synthetic' }
   ] },
   telegram: { botToken: '123:synthetic', ownerUserId: 400, chatId: 500, debugChatId: -800, debugCooldownMs: 60_000 }
-} as TelegramAppConfig;
+} as AppConfig;
 const bot: UserFromGetMe = { id: 123, username: 'hedwig_test_bot', first_name: 'Hedwig', is_bot: true,
   can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false,
   can_connect_to_business: false, has_main_web_app: false, has_topics_enabled: false, allows_users_to_create_topics: false,

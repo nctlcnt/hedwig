@@ -2,7 +2,6 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
-import { migrateFollowupStore } from './followup-store.js';
 import { buildGmailMessageUrl } from './gmail-url.js';
 import { migrateNotificationOutbox } from './notifications/outbox-store.js';
 import { migrateTelegramStore } from './telegram/store.js';
@@ -166,7 +165,7 @@ function alertKey(signature: string): string {
 // Read-only dedup check for operational alerts: true when this signature already
 // fired within cooldownMs and should stay suppressed. It does NOT claim the slot
 // — the caller records the send via recordAlertSent only after it succeeds, so a
-// failed Discord post doesn't silence the alert for the whole window.
+// failed alert delivery doesn't silence the alert for the whole window.
 export function isAlertOnCooldown(db: HedwigDb, signature: string, cooldownMs: number, now: Date = new Date()): boolean {
   const row = db.prepare(`
     select last_sent_at as lastSentAt from alert_log where signature = ?
@@ -231,7 +230,7 @@ export function getLastSyncAt(db: HedwigDb): string | null {
 // Returns which of the given Gmail ids have already been classified for this
 // account. This is the dedup signal that replaces relying on Gmail's read flag,
 // so processed mail can be left unread/in-inbox without being reprocessed (and
-// re-pushed to Discord) on the next run.
+// re-pushed as a notification) on the next run.
 export function findProcessedGmailIds(db: HedwigDb, accountId: string, gmailIds: string[]): Set<string> {
   if (gmailIds.length === 0) return new Set();
   const placeholders = gmailIds.map(() => '?').join(', ');
@@ -511,7 +510,6 @@ function migrate(db: HedwigDb): void {
   migrateProcessingOutcome(db);
   backfillProcessedAt(db);
   migrateMessageClassificationsUniqueConstraint(db);
-  migrateFollowupStore(db);
   migrateNotificationOutbox(db);
   migrateTelegramStore(db);
   deleteExpiredEmailBodyCache(db);

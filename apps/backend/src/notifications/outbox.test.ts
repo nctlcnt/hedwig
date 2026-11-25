@@ -3,102 +3,118 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../db.js';
-import type { DiscordAppConfig, DigestItem, DigestReport, DigestSection } from '../types.js';
-import { createDiscordNotifier } from './discord-notifier.js';
-import { DeliveryError } from './notifier.js';
+import type { AppConfig, DigestItem, DigestReport, DigestSection } from '../types.js';
+import { DeliveryError, type DeliveryPart, type DeliveryRequest, type Notifier, type OperationalAlert } from './notifier.js';
 import { claimDelivery, enqueueNotification, finishDelivery } from './outbox-store.js';
 import { createOutboxDrain } from './outbox-worker.js';
 
 const directory = mkdtempSync(join(tmpdir(), 'hedwig-outbox-'));
-const config = {
-  messagingProvider: 'discord',
-  database: { path: join(directory, 'test.db') },
-  discord: {
-    botToken: 'synthetic-token',
-    digestChannelId: 'digest-channel',
-    realtimeChannelId: 'urgent-channel',
-    debugChannelId: 'debug-channel',
-    debugCooldownMs: 3_600_000
-  }
-} as DiscordAppConfig;
-const notifier = createDiscordNotifier(config);
+const config = { database: { path: join(directory, 'test.db') } } as AppConfig;
 const digest = makeDigest();
-const paths: string[] = [];
-const responses: Response[] = [];
-const originalFetch = globalThis.fetch;
-globalThis.fetch = async (input) => {
-  paths.push(new URL(String(input)).pathname);
-  const response = responses.shift();
-  if (!response) throw new Error('Unexpected Discord request');
-  return response;
+
+// A fake platform with the dependency shape the outbox must support: a summary,
+// a thread that needs the summary's message ID, and detail parts under the thread.
+const requests: DeliveryRequest[] = [];
+const outcomes: Array<string | DeliveryError> = [];
+const alerts: OperationalAlert[] = [];
+const notifier: Notifier = {
+  platform: 'fake',
+  digestDestination: 'digest-chat',
+  realtimeDestination: 'urgent-chat',
+  alertCooldownMs: 3_600_000,
+  planDigest(report: DigestReport): DeliveryPart[] {
+    const parts: DeliveryPart[] = [{ key: 'summary', payload: { text: report.date } }];
+    if (report.total === 0) return parts;
+    parts.push({ key: 'thread', after: 'summary', payload: { text: 'thread' } });
+    for (const section of report.sections) {
+      if (section.items.length > 0) parts.push({ key: `${section.category}:1`, after: 'thread', payload: { text: section.category } });
+    }
+    return parts;
+  },
+  planRealtime(item: DigestItem): DeliveryPart {
+    return { key: 'message', payload: { text: item.subject } };
+  },
+  async deliver(request: DeliveryRequest): Promise<string> {
+    requests.push(request);
+    const outcome = outcomes.shift();
+    if (outcome === undefined) throw new Error('Unexpected delivery');
+    if (outcome instanceof DeliveryError) throw outcome;
+    return outcome;
+  },
+  async sendOperationalAlert(alert: OperationalAlert): Promise<void> {
+    alerts.push(alert);
+  }
 };
 
 let db = openDatabase(config);
 try {
   const { date } = digest;
   enqueueNotification(db, notifier, 'digest', date, notifier.planDigest(digest));
+  // A repeated cron run for the same day must not create a second digest.
   enqueueNotification(db, notifier, 'digest', date, [{ key: 'replacement', payload: {} }]);
-  const summaryPath = '/api/v10/channels/digest-channel/messages';
-  const threadPath = '/api/v10/channels/digest-channel/messages/summary-id/threads';
-  const detailPath = '/api/v10/channels/summary-id/messages';
-  responses.push(
-    ok('summary-id'),
-    Response.json({ code: 160004 }, { status: 400 }),
-    Response.json({ message: 'Temporary failure' }, { status: 503 }),
-    ok('fyi-id')
-  );
+  outcomes.push('summary-id', 'thread-id', new DeliveryError(503), 'fyi-id');
   let now = Date.now();
   const firstDrain = createOutboxDrain(db, notifier, () => now);
   const running = firstDrain();
   assert.equal(firstDrain(), running);
   await running;
-  assert.deepEqual(paths, [summaryPath, threadPath, detailPath, detailPath]);
+  assert.deepEqual(targets(), [
+    ['digest-chat', null],
+    ['digest-chat', 'summary-id'],
+    ['digest-chat', 'thread-id'],
+    ['digest-chat', 'thread-id']
+  ]);
   assert.deepEqual(state(date), [
     row('summary', 'sent', 1, 'summary-id'),
-    row('thread', 'sent', 1, 'summary-id'),
+    row('thread', 'sent', 1, 'thread-id'),
     row('action:1', 'pending', 1, null, 'HTTP 503'),
     row('fyi:1', 'sent', 1, 'fyi-id')
   ]);
 
+  // Pending work survives a restart and waits for its backoff.
   db.close();
   db = openDatabase(config);
   const drain = createOutboxDrain(db, notifier, () => now);
   await drain();
-  assert.equal(paths.length, 4);
+  assert.equal(requests.length, 4);
   now += 15_000;
-  responses.push(ok('action-id'));
+  outcomes.push('action-id');
   await drain();
-  assert.deepEqual(paths.slice(4), [detailPath]);
+  assert.deepEqual(targets().slice(4), [['digest-chat', 'thread-id']]);
   assert.deepEqual(state(date)[2], row('action:1', 'sent', 2, 'action-id'));
 
   const urgentPart = notifier.planRealtime(digest.sections[0]!.items[0]!);
   enqueueNotification(db, notifier, 'realtime', 'urgent-1', [urgentPart]);
-  responses.push(Response.json({ retry_after: 45.25 }, { status: 429, headers: { 'Retry-After': '40' } }));
+  outcomes.push(new DeliveryError(429, 45_250));
   await drain();
-  const urgentPath = '/api/v10/channels/urgent-channel/messages';
-  assert.deepEqual(paths.slice(5), [urgentPath]);
+  assert.deepEqual(targets().slice(5), [['urgent-chat', null]]);
   // A provider pause also applies to work enqueued after the rate limit.
   enqueueNotification(db, notifier, 'realtime', 'urgent-2', [urgentPart]);
   now += 45_249;
   await drain();
-  assert.equal(paths.length, 6);
+  assert.equal(requests.length, 6);
   now += 1;
-  responses.push(ok('urgent-2-id'), ok('urgent-1-id'));
+  outcomes.push('urgent-2-id', 'urgent-1-id');
   await drain();
-  assert.deepEqual(paths.slice(6), [urgentPath, urgentPath]);
+  assert.deepEqual(targets().slice(6), [['urgent-chat', null], ['urgent-chat', null]]);
   assert.deepEqual(state('urgent-1'), [row('message', 'sent', 2, 'urgent-1-id')]);
+  assert.deepEqual(state('urgent-2'), [row('message', 'sent', 1, 'urgent-2-id')]);
 
+  // A permanent error fails the dependent parts and raises one operational alert.
   const forbidden = '2026-11-19';
   enqueueNotification(db, notifier, 'digest', forbidden, notifier.planDigest({ ...digest, date: forbidden }));
-  responses.push(Response.json({ message: 'Sensitive response details' }, { status: 403 }), Response.json({}, { status: 403 }));
+  outcomes.push(new DeliveryError(403));
   await drain();
-  assert.deepEqual(paths.slice(8), [summaryPath, '/api/v10/channels/debug-channel/messages']);
+  assert.equal(requests.length, 9);
   assert.deepEqual(state(forbidden), [
     row('summary', 'failed', 1, null, 'HTTP 403'),
     row('thread', 'failed', 0, null, 'Prerequisite delivery failed'),
     row('action:1', 'failed', 0, null, 'Prerequisite delivery failed'),
     row('fyi:1', 'failed', 0, null, 'Prerequisite delivery failed')
   ]);
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0]!.kind, 'job-failure');
+  assert.equal(alerts[0]!.signature, 'notification-delivery:fake:digest|HTTP 403');
 
   const otherDb = openDatabase(config);
   try {
@@ -107,7 +123,7 @@ try {
     assert.ok(first);
     assert.equal(claimDelivery(otherDb, notifier, now), undefined);
     now += 120_000;
-    assert.equal(claimDelivery(otherDb, { ...notifier, realtimeDestination: 'new-channel' }, now), undefined);
+    assert.equal(claimDelivery(otherDb, { ...notifier, realtimeDestination: 'new-chat' }, now), undefined);
     const recovered = claimDelivery(otherDb, notifier, now);
     assert.ok(recovered);
     assert.equal(recovered.id, first.id);
@@ -135,15 +151,18 @@ try {
   }
   assert.equal(attempts, 6);
   assert.deepEqual(state('exhausted'), [row('message', 'failed', 6, null, 'network')]);
-  assert.equal(responses.length, 0);
+  assert.equal(outcomes.length, 0);
   assert.deepEqual(db.prepare(`select id from notification_outbox where payload_json is not null`).all(), []);
 } finally {
-  globalThis.fetch = originalFetch;
   if (db.open) db.close();
   rmSync(directory, { recursive: true, force: true });
 }
 
 console.log('outbox.test.ts: all assertions passed');
+
+function targets(): Array<[string, string | null]> {
+  return requests.map((request) => [request.destination, request.parentMessageId]);
+}
 
 function state(key: string): unknown[] {
   return db.prepare(`
@@ -154,10 +173,6 @@ function state(key: string): unknown[] {
 
 function row(key: string, status: string, attempts: number, messageId: string | null, error: string | null = null) {
   return { key, status, attempts, messageId, error };
-}
-
-function ok(id: string): Response {
-  return Response.json({ id });
 }
 
 function makeDigest(): DigestReport {
@@ -179,7 +194,7 @@ function makeDigest(): DigestReport {
       processingOutcome: category === 'action' ? 'push_now' : 'digest_only',
       gmailUrl: 'https://mail.google.com/mail/#all/test'
     };
-    return { category, title: category, lead: '', items: [item] };
+    return { category, title: category, items: [item] };
   });
   return {
     runIds: [], account: 'Test Account', date: '2026-11-18', total: 2, accounts: [], sections,

@@ -16,7 +16,6 @@ import {
   updateDigestRunAccount
 } from './db.js';
 import { problemMessage, reportProblem } from './alerts.js';
-import { summarizeSections } from './llm/section-narrator.js';
 import type {
   AppConfig,
   Category,
@@ -75,10 +74,6 @@ export async function queueTodayDigest(
   results: AccountProcessResult[] = []
 ): Promise<DigestReport> {
   const digest = readTodayDigest(db, config.digest.timezone, results);
-  if (notifier.platform !== 'telegram' && digest.total > 0) {
-    const leads = await summarizeSections(config, groupItems(digest.sections.flatMap((section) => section.items)), getSummaryLanguage(db));
-    for (const section of digest.sections) section.lead = leads[section.category] || '';
-  }
   db.transaction(() => {
     enqueueNotification(db, notifier, 'digest', digest.date, notifier.planDigest(digest));
   }).immediate();
@@ -293,8 +288,7 @@ function buildDigest(
   const sections = categoryOrder().map((category) => ({
     category,
     title: metadata[category].title,
-    items: grouped[category],
-    lead: ''
+    items: grouped[category]
   }));
 
   const accounts = results.map(toAccountSummary);

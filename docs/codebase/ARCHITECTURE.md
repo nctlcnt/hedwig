@@ -1,5 +1,7 @@
 # Architecture
 
+> **快照说明：** 本文档是 2026-07-25 的代码审计快照，没有覆盖之后的改动。2026-11-18 起消息投递迁移到 Telegram，并增加了 SQLite outbox；2026-11-25 起 Discord 投递和 follow-up 功能已经从代码中移除（LT-196）。文中关于 Discord、follow-up 和 section narrator 的描述只代表当时的状态。
+
 ## Core Sections (Required)
 
 ### 1) Architectural Style
