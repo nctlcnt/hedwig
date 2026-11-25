@@ -3,23 +3,40 @@ import type { gmail_v1 } from 'googleapis';
 export type Category = 'action' | 'fyi' | 'course' | 'admin' | 'junk';
 export type ProcessingOutcome = 'suppress' | 'digest_only' | 'push_now';
 
-export type AppConfig = {
+export type AppConfig = DiscordAppConfig | TelegramAppConfig;
+
+export type DiscordAppConfig = CommonAppConfig & {
+  messagingProvider: 'discord';
+  discord: {
+    botToken: string;
+    digestChannelId: string;
+    realtimeChannelId: string;
+    debugChannelId: string;
+    debugCooldownMs: number;
+  };
+  followup: FollowupConfig;
+};
+
+export type TelegramAppConfig = CommonAppConfig & {
+  messagingProvider: 'telegram';
+  telegram: TelegramConfig;
+};
+
+export type TelegramConfig = {
+  botToken: string;
+  ownerUserId: number;
+  chatId: number;
+  debugChatId: number | null;
+  debugCooldownMs: number;
+};
+
+type CommonAppConfig = {
   google: {
     clientId: string;
     clientSecret: string;
     redirectUri: string;
     accounts: GmailAccountConfig[];
   };
-  discord: {
-    botToken: string;
-    digestChannelId: string;
-    realtimeChannelId: string;
-    // Optional operational-error channel. Alerts here are deduped: the same
-    // problem signature is silenced for debugCooldownMs after it fires.
-    debugChannelId: string;
-    debugCooldownMs: number;
-  };
-  followup: FollowupConfig;
   digest: {
     timezone: string;
     cron: string;

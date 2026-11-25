@@ -18,6 +18,7 @@ import {
 import type { AppConfig, Classification, EmailMessage } from './types.js';
 
 const config: AppConfig = {
+  messagingProvider: 'discord',
   google: {
     clientId: '',
     clientSecret: '',

@@ -8,6 +8,7 @@ import {
 import type { AppConfig } from './types.js';
 
 const config: AppConfig = {
+  messagingProvider: 'discord',
   google: { clientId: '', clientSecret: '', redirectUri: '', accounts: [] },
   discord: {
     botToken: '',

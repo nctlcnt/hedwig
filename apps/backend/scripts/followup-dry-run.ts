@@ -9,23 +9,24 @@ import {
   saveMessage
 } from '../src/db.js';
 import { sendDiscordRealtime } from '../src/discord.js';
-import type { Classification, DigestItem, EmailMessage } from '../src/types.js';
+import type { Classification, DigestItem, DiscordAppConfig, EmailMessage } from '../src/types.js';
 
 const config = loadConfig();
+if (config.messagingProvider !== 'discord') throw new Error('The follow-up dry run requires Discord');
 const db = openDatabase(config);
 const cleanupAccountId = cleanupTarget(process.argv.slice(2));
 
 try {
   if (cleanupAccountId) {
-    await cleanupDryRun(cleanupAccountId);
+    await cleanupDryRun(cleanupAccountId, config.discord.botToken);
   } else {
-    await createDryRun();
+    await createDryRun(config);
   }
 } finally {
   db.close();
 }
 
-async function createDryRun(): Promise<void> {
+async function createDryRun(config: DiscordAppConfig): Promise<void> {
   if (!config.followup.enabled) {
     throw new Error('FOLLOWUP_ENABLED must be true for the follow-up dry run');
   }
@@ -57,7 +58,7 @@ async function createDryRun(): Promise<void> {
   console.log(`Cleanup after testing: npm run dry-run:followup -- --cleanup ${accountId}`);
 }
 
-async function cleanupDryRun(accountId: string): Promise<void> {
+async function cleanupDryRun(accountId: string, botToken: string): Promise<void> {
   const threadRows = db.prepare(`
     select discord_thread_id as threadId
     from followups
@@ -65,7 +66,7 @@ async function cleanupDryRun(accountId: string): Promise<void> {
   `).all(accountId) as Array<{ threadId: string }>;
 
   for (const row of threadRows) {
-    await deleteDiscordThread(row.threadId);
+    await deleteDiscordThread(row.threadId, botToken);
   }
 
   const counts = db.transaction(() => {
@@ -80,11 +81,11 @@ async function cleanupDryRun(accountId: string): Promise<void> {
   );
 }
 
-async function deleteDiscordThread(threadId: string): Promise<void> {
+async function deleteDiscordThread(threadId: string, botToken: string): Promise<void> {
   const response = await fetch(`https://discord.com/api/v10/channels/${threadId}`, {
     method: 'DELETE',
     headers: {
-      Authorization: `Bot ${config.discord.botToken}`
+      Authorization: `Bot ${botToken}`
     }
   });
   if (response.ok || response.status === 404) return;

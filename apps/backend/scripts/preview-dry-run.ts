@@ -4,6 +4,7 @@ import { sendDiscordRealtime } from '../src/discord.js';
 import type { DigestItem, EmailMessage } from '../src/types.js';
 
 const config = loadConfig();
+if (config.messagingProvider !== 'discord') throw new Error('The preview dry run requires Discord');
 const db = openDatabase(config);
 const now = new Date();
 const id = `dryrun-${Date.now()}`;
