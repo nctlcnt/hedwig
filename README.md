@@ -1,9 +1,9 @@
 # Hedwig
 
-A personal Gmail digest and follow-up assistant for Discord.
+A personal Gmail digest assistant for Discord and Telegram.
 
 Hedwig reads new inbox mail, classifies it, stores workflow state in SQLite, and
-delivers realtime alerts and daily digests to Discord. Gmail access is
+delivers realtime alerts and daily digests through the configured provider. Gmail access is
 read-only: mailbox state is never used as Hedwig's workflow state.
 
 ## Features
@@ -38,7 +38,7 @@ Suppressed junk and one-time codes remain unchanged in Gmail.
 
 - Node.js 20 or newer
 - Google OAuth credentials with Gmail API access
-- A Discord bot and digest channel
+- A Discord bot and digest channel or a Telegram bot and owner private chat
 
 ## Quick start
 
@@ -50,7 +50,7 @@ cp .env.example .env
 npm install
 ```
 
-Set the Google OAuth and Discord values in `.env`, then authorize a Gmail
+Set the Google OAuth and messaging provider values in `.env`, then authorize a Gmail
 account:
 
 ```bash
@@ -82,10 +82,15 @@ The main settings are:
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `GMAIL_ACCOUNTS_JSON` | Local multi-account configuration file |
+| `MESSAGING_PROVIDER` | `discord` by default, or `telegram` for private-chat delivery |
 | `DISCORD_BOT_TOKEN` | Discord bot token |
 | `DISCORD_DIGEST_CHANNEL_ID` | Daily digest destination |
 | `DISCORD_REALTIME_CHANNEL_ID` | Optional realtime alert destination |
 | `DISCORD_DEBUG_CHANNEL_ID` | Optional operational alert destination |
+| `TELEGRAM_BOT_TOKEN` | Token for the Telegram bot |
+| `TELEGRAM_OWNER_USER_ID` | Allowed numeric Telegram user ID |
+| `TELEGRAM_CHAT_ID` | Allowed private chat ID |
+| `TELEGRAM_DEBUG_CHAT_ID` | Optional private group for operational alerts |
 | `DIGEST_TIMEZONE` | Digest schedule timezone |
 | `DIGEST_CRON` | Daily digest cron expression |
 | `DIGEST_PROCESS_CRON` | Gmail History polling cron expression |
@@ -93,6 +98,13 @@ The main settings are:
 
 Account IDs must remain stable because they are part of the SQLite
 deduplication keys.
+
+Telegram uses long polling. Create a bot in BotFather, enter its token and the
+owner/private chat IDs in `.env`, then send `/start` from that private chat with
+the daemon running. An existing Telegram webhook blocks daemon startup. Use a
+separate bot token and SQLite database for a test instance.
+Run `npm run messaging:check` to validate settings, including Telegram bot
+credentials and webhook status, without syncing Gmail or sending messages.
 
 ### Natural-language classification rules
 
@@ -126,6 +138,22 @@ mail jobs. Email previews then offer three tracking modes:
 
 Tracked message snapshots are stored in SQLite. Gmail remains read-only.
 
+## Telegram behavior
+
+The daily overview shows the account names and four category counts. Open a
+category to browse messages and open a message to read its details or cached
+body. The buttons edit the same Telegram message and return to the previous
+list page. Urgent alerts also offer a details button and a Gmail link.
+
+- `/today` opens today's saved overview or builds a view from mail already
+  classified in SQLite.
+- `/status` shows the latest sync and successful delivery times, plus the
+  number of queued deliveries.
+- `/summary_language English` sets the language for newly generated summaries.
+
+Digest views and buttons expire after seven days. When a body cache entry has
+expired, the message can still be opened in Gmail.
+
 ## Discord behavior
 
 The daily digest posts a compact overview and places full sections in a thread.
@@ -149,7 +177,7 @@ summaries are not rewritten.
 | Command | Purpose |
 | --- | --- |
 | `npm run google:auth` | Authorize a Gmail account |
-| `npm run digest:once` | Process mail and send one digest |
+| `npm run digest:once` | Process mail, queue today's digest, and attempt due deliveries |
 | `npm run digest:daemon` | Run History polling and digest schedules |
 | `npm run cleanup` | Delete expired local email body cache rows |
 | `npm run dry-run:preview` | Send a synthetic Discord preview |

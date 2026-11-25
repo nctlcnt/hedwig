@@ -15,8 +15,7 @@ import {
   setSyncCursor,
   updateDigestRunAccount
 } from './db.js';
-import { reportProblem } from './alerts.js';
-import { buildClassifierFailureAlert, sendDiscordDigest, sendDiscordRealtime } from './discord.js';
+import { problemMessage, reportProblem } from './alerts.js';
 import { summarizeSections } from './llm/section-narrator.js';
 import type {
   AppConfig,
@@ -31,6 +30,8 @@ import type {
 } from './types.js';
 import type { HedwigDb } from './db.js';
 import type { MailAccount, MailGateway } from './gateway/mail-gateway.js';
+import type { Notifier } from './notifications/notifier.js';
+import { enqueueNotification } from './notifications/outbox-store.js';
 
 type AccountProcessResult = {
   runId: number;
@@ -42,47 +43,69 @@ type AccountProcessResult = {
   error?: string;
 };
 
-export async function runDailyDigest(config: AppConfig, db: HedwigDb, mailGateway: MailGateway): Promise<DigestReport> {
-  const results = await processUnreadMail(config, db, mailGateway);
-  return sendTodayDigest(config, db, results);
+export async function runDailyDigest(
+  config: AppConfig,
+  db: HedwigDb,
+  mailGateway: MailGateway,
+  notifier: Notifier
+): Promise<DigestReport> {
+  const results = await processUnreadMail(config, db, mailGateway, notifier);
+  return queueTodayDigest(config, db, notifier, results);
 }
 
 export async function processUnreadMail(
   config: AppConfig,
   db: HedwigDb,
-  mailGateway: MailGateway
+  mailGateway: MailGateway,
+  notifier: Notifier
 ): Promise<AccountProcessResult[]> {
   const results: AccountProcessResult[] = [];
 
   for (const account of mailGateway.listAccounts()) {
-    results.push(await processAccountUnreadMail(config, account, mailGateway, db));
+    results.push(await processAccountUnreadMail(config, account, mailGateway, db, notifier));
   }
 
   return results;
 }
 
-export async function sendTodayDigest(
+export async function queueTodayDigest(
   config: AppConfig,
   db: HedwigDb,
+  notifier: Notifier,
   results: AccountProcessResult[] = []
 ): Promise<DigestReport> {
-  const window = todayWindow(config);
-  const items = listProcessedDigestItems(db, window.start, window.end);
-  const digest = await buildDigest(config, items, results, getSummaryLanguage(db));
-  await sendDiscordDigest(config, digest);
+  const digest = readTodayDigest(db, config.digest.timezone, results);
+  if (notifier.platform !== 'telegram' && digest.total > 0) {
+    const leads = await summarizeSections(config, groupItems(digest.sections.flatMap((section) => section.items)), getSummaryLanguage(db));
+    for (const section of digest.sections) section.lead = leads[section.category] || '';
+  }
+  db.transaction(() => {
+    enqueueNotification(db, notifier, 'digest', digest.date, notifier.planDigest(digest));
+  }).immediate();
   return digest;
+}
+
+export function readTodayDigest(
+  db: HedwigDb,
+  timezone: string,
+  results: AccountProcessResult[] = []
+): DigestReport {
+  const window = todayWindow(timezone);
+  const items = listProcessedDigestItems(db, window.start, window.end);
+  return buildDigest(window.date, items, results);
 }
 
 async function processAccountUnreadMail(
   config: AppConfig,
   accountConfig: MailAccount,
   mailGateway: MailGateway,
-  db: HedwigDb
+  db: HedwigDb,
+  notifier: Notifier
 ): Promise<AccountProcessResult> {
   const startCursor = getSyncCursor(db, accountConfig.id);
   let nextCursor: string | null = null;
 
-  const result = await runAccountClassificationPass(config, accountConfig, mailGateway, db, async () => {
+  const result = await runAccountClassificationPass(config, accountConfig, mailGateway, db, notifier, async () => {
     const sync = await mailGateway.syncInboxMessages(accountConfig, {
       cursor: startCursor,
       lookbackHours: config.digest.lookbackHours,
@@ -109,6 +132,7 @@ async function runAccountClassificationPass(
   accountConfig: MailAccount,
   mailGateway: MailGateway,
   db: HedwigDb,
+  notifier: Notifier,
   fetchRefs: () => Promise<{ id?: string | null }[]>
 ): Promise<AccountProcessResult> {
   let account = accountConfig.displayName;
@@ -116,6 +140,22 @@ async function runAccountClassificationPass(
   const counts = zeroCounts();
   const classifier = createClassifier(config, getSummaryLanguage(db));
   const classifierFailures: ClassifierFailure[] = [];
+  const saveProcessedEmail = db.transaction((
+    email: EmailMessage,
+    classification: Classification,
+    processingOutcome: ProcessingOutcome
+  ): boolean => {
+    // Another pass may have stored this mail while this pass was classifying it.
+    if (findProcessedGmailIds(db, accountConfig.id, [email.id]).has(email.id)) return false;
+    saveMessage(db, account, email);
+    saveEmailBodyCache(db, email);
+    saveClassification(db, runId, email, classification, processingOutcome);
+    if (processingOutcome === 'push_now' && notifier.realtimeDestination) {
+      const item = digestItem(accountConfig, account, email, classification, processingOutcome);
+      enqueueNotification(db, notifier, 'realtime', item.mailId, [notifier.planRealtime(item)]);
+    }
+    return true;
+  });
 
   try {
     account = await mailGateway.getCurrentUser(accountConfig);
@@ -135,6 +175,9 @@ async function runAccountClassificationPass(
 
       const classification = await classifier.classify(email);
       const processingOutcome = processingOutcomeFor(classification.category);
+      const stored = saveProcessedEmail.immediate(email, classification, processingOutcome);
+      alreadyProcessed.add(ref.id);
+      if (!stored) continue;
 
       if (classification.provider === 'rule-fallback') {
         classifierFailures.push({
@@ -145,17 +188,10 @@ async function runAccountClassificationPass(
         });
       }
 
-      saveMessage(db, account, email);
-      saveEmailBodyCache(db, email);
-      saveClassification(db, runId, email, classification, processingOutcome);
-
-      if (processingOutcome === 'push_now') {
-        await sendDiscordRealtime(config, digestItem(accountConfig, account, email, classification, processingOutcome));
-      }
       counts[classification.category] += 1;
     }
 
-    await notifyClassifierFailures(config, db, account, classifierFailures);
+    await notifyClassifierFailures(notifier, db, account, classifierFailures);
 
     const total = totalCount(counts);
     finishDigestRun(db, runId, total);
@@ -169,10 +205,13 @@ async function runAccountClassificationPass(
     };
   } catch (error) {
     failDigestRun(db, runId, error);
-    await reportProblem(config, db, {
-      signature: `account-failed:${accountConfig.id}|${errorMessage(error).slice(0, 120)}`,
-      title: `账号处理失败：${accountConfig.displayName}`,
-      detail: `账号 **${accountConfig.displayName}** (${account}) 本轮处理失败：\n${errorMessage(error)}`
+    const detail = problemMessage(error);
+    await reportProblem(notifier, db, {
+      kind: 'account-failure',
+      signature: `account-failed:${accountConfig.id}|${detail.slice(0, 120)}`,
+      accountName: accountConfig.displayName,
+      accountEmail: account,
+      detail
     });
     return {
       runId,
@@ -181,21 +220,26 @@ async function runAccountClassificationPass(
       accountEmail: account,
       counts,
       total: totalCount(counts),
-      error: errorMessage(error)
+      error: detail
     };
   }
 }
 
 async function notifyClassifierFailures(
-  config: AppConfig,
+  notifier: Notifier,
   db: HedwigDb,
   account: string,
   failures: ClassifierFailure[]
 ): Promise<void> {
   if (failures.length === 0) return;
-  // reportProblem is itself best-effort and never throws, so a failed alert
-  // cannot fail the run; the mail is already saved.
-  await reportProblem(config, db, buildClassifierFailureAlert(account, failures));
+  const reasons = [...new Set(failures.map((failure) => failure.reason).filter(Boolean))].slice(0, 3);
+  await reportProblem(notifier, db, {
+    kind: 'classifier-fallback',
+    signature: `classifier-fallback|${reasons.join(' / ')}`,
+    account,
+    failures,
+    reasons
+  });
 }
 
 function digestItem(
@@ -234,25 +278,23 @@ function emptyGroups(): Record<Category, DigestItem[]> {
   return Object.fromEntries(categoryOrder().map((category) => [category, []])) as unknown as Record<Category, DigestItem[]>;
 }
 
-async function buildDigest(
-  config: AppConfig,
+function buildDigest(
+  date: string,
   items: DigestItem[],
-  results: AccountProcessResult[],
-  summaryLanguage: string | null
-): Promise<DigestReport> {
+  results: AccountProcessResult[]
+): DigestReport {
   const grouped = groupItems(items);
   for (const category of categoryOrder()) {
     grouped[category].sort((a, b) => b.importance - a.importance);
   }
   const counts = groupCounts(grouped);
   const total = totalCount(counts);
-  const leads = total > 0 ? await summarizeSections(config, grouped, summaryLanguage) : blankLeads();
   const metadata = categories();
   const sections = categoryOrder().map((category) => ({
     category,
     title: metadata[category].title,
     items: grouped[category],
-    lead: leads[category] || ''
+    lead: ''
   }));
 
   const accounts = results.map(toAccountSummary);
@@ -260,16 +302,12 @@ async function buildDigest(
   return {
     runIds: results.map((result) => result.runId),
     account: accounts.length > 0 ? accounts.map((item) => `${item.accountName} <${item.accountEmail}>`).join(', ') : 'processed mail',
-    date: todayWindow(config).date,
+    date,
     total,
     counts,
     accounts,
     sections
   };
-}
-
-function blankLeads(): Record<Category, string> {
-  return Object.fromEntries(categoryOrder().map((category) => [category, ''])) as Record<Category, string>;
 }
 
 function groupItems(items: DigestItem[]): Record<Category, DigestItem[]> {
@@ -306,16 +344,12 @@ function toAccountSummary(result: AccountProcessResult): DigestAccountSummary {
   };
 }
 
-function todayWindow(config: AppConfig): { date: string; start: Date; end: Date } {
-  const now = DateTime.now().setZone(config.digest.timezone);
+function todayWindow(timezone: string): { date: string; start: Date; end: Date } {
+  const now = DateTime.now().setZone(timezone);
   const start = now.startOf('day');
   return {
     date: now.toISODate() || new Date().toISOString().slice(0, 10),
     start: start.toUTC().toJSDate(),
     end: start.plus({ days: 1 }).toUTC().toJSDate()
   };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

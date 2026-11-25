@@ -21,7 +21,7 @@ import {
 } from './followup-service.js';
 import type { FollowupKind } from './followup-store.js';
 import { MAX_SUMMARY_LANGUAGE_LENGTH, normalizeSummaryLanguage } from './summary-language.js';
-import type { AppConfig, CachedEmailPreview } from './types.js';
+import type { DiscordAppConfig, CachedEmailPreview } from './types.js';
 
 const PREVIEW_BUTTON_PREFIX = 'email_preview:';
 const FOLLOWUP_BUTTON_PREFIX = 'followup:create:';
@@ -39,7 +39,7 @@ const summaryLanguageCommand = new SlashCommandBuilder()
       .setMaxLength(MAX_SUMMARY_LANGUAGE_LENGTH)
   ));
 
-export async function startDiscordBot(config: AppConfig, db: HedwigDb): Promise<Client<true>> {
+export async function startDiscordBot(config: DiscordAppConfig, db: HedwigDb): Promise<Client<true>> {
   const client = new Client({
     intents: [GatewayIntentBits.Guilds]
   });
@@ -130,7 +130,7 @@ async function handleSummaryLanguageCommand(
   }
 }
 
-function previewReply(config: AppConfig, db: HedwigDb, mailId: string): InteractionReplyOptions {
+function previewReply(config: DiscordAppConfig, db: HedwigDb, mailId: string): InteractionReplyOptions {
   const preview = getCachedEmailPreview(db, mailId);
   if (!preview) {
     return {
@@ -148,7 +148,7 @@ function previewReply(config: AppConfig, db: HedwigDb, mailId: string): Interact
 
 async function handleFollowupCreate(
   interaction: ButtonInteraction,
-  config: AppConfig,
+  config: DiscordAppConfig,
   db: HedwigDb
 ): Promise<void> {
   if (!config.followup.enabled) {
@@ -229,7 +229,7 @@ function parseFollowupButton(customId: string): {
 
 async function publishFollowupForumPost(
   interaction: ButtonInteraction,
-  config: AppConfig,
+  config: DiscordAppConfig,
   draft: FollowupForumDraft
 ): Promise<{ forumChannelId: string; threadId: string; messageId: string }> {
   const channel = await interaction.client.channels.fetch(config.followup.forumChannelId);

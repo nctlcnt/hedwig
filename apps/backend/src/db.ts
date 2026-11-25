@@ -4,6 +4,8 @@ import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import { migrateFollowupStore } from './followup-store.js';
 import { buildGmailMessageUrl } from './gmail-url.js';
+import { migrateNotificationOutbox } from './notifications/outbox-store.js';
+import { migrateTelegramStore } from './telegram/store.js';
 import type {
   AppConfig,
   CachedEmailPreview,
@@ -221,6 +223,11 @@ export function setSyncCursor(db: HedwigDb, accountId: string, historyId: string
   `).run(accountId, historyId, new Date().toISOString());
 }
 
+export function getLastSyncAt(db: HedwigDb): string | null {
+  const row = db.prepare('select max(updated_at) as updatedAt from sync_state').get() as { updatedAt: string | null };
+  return row.updatedAt;
+}
+
 // Returns which of the given Gmail ids have already been classified for this
 // account. This is the dedup signal that replaces relying on Gmail's read flag,
 // so processed mail can be left unread/in-inbox without being reprocessed (and
@@ -381,6 +388,15 @@ export function getCachedEmailPreview(db: HedwigDb, mailId: string): CachedEmail
   };
 }
 
+export function getStoredGmailUrl(db: HedwigDb, mailId: string): string | undefined {
+  const parsed = parseMailId(mailId);
+  if (!parsed) return undefined;
+  const row = db.prepare(`
+    select account, thread_id as threadId from messages where account_id = ? and gmail_id = ?
+  `).get(parsed.accountId, parsed.gmailId) as { account: string; threadId: string } | undefined;
+  return row && buildGmailMessageUrl(row.account, row.threadId);
+}
+
 export function deleteExpiredEmailBodyCache(db: HedwigDb): number {
   const result = db.prepare(`
     delete from email_body_cache
@@ -496,6 +512,8 @@ function migrate(db: HedwigDb): void {
   backfillProcessedAt(db);
   migrateMessageClassificationsUniqueConstraint(db);
   migrateFollowupStore(db);
+  migrateNotificationOutbox(db);
+  migrateTelegramStore(db);
   deleteExpiredEmailBodyCache(db);
 }
 

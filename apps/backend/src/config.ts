@@ -4,7 +4,8 @@ import type {
   AppConfig,
   FollowupConfig,
   GmailAccountConfig,
-  LlmClassifierConfig
+  LlmClassifierConfig,
+  TelegramConfig
 } from './types.js';
 
 function required(name: string): string {
@@ -57,6 +58,11 @@ export function loadFollowupConfig(env: NodeJS.ProcessEnv = process.env): Follow
 }
 
 export function loadConfig(): AppConfig {
+  const messagingProvider = process.env.MESSAGING_PROVIDER ?? 'discord';
+  if (messagingProvider !== 'discord' && messagingProvider !== 'telegram') {
+    throw new Error('MESSAGING_PROVIDER must be "discord" or "telegram"');
+  }
+
   const rawProvider = process.env.CLASSIFIER_PROVIDER
     || (process.env.CLASSIFIER_API_KEY || process.env.DEEPSEEK_API_KEY ? 'openai-compatible' : 'rule');
   const provider = rawProvider === 'deepseek' ? 'openai-compatible' : rawProvider;
@@ -64,21 +70,13 @@ export function loadConfig(): AppConfig {
     throw new Error(`CLASSIFIER_PROVIDER must be "rule", "openai-compatible", or legacy "deepseek", got: ${rawProvider}`);
   }
 
-  return {
+  const common: Omit<AppConfig, 'messagingProvider'> = {
     google: {
       clientId: required('GOOGLE_CLIENT_ID'),
       clientSecret: required('GOOGLE_CLIENT_SECRET'),
       redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost',
       accounts: gmailAccounts()
     },
-    discord: {
-      botToken: required('DISCORD_BOT_TOKEN'),
-      digestChannelId: required('DISCORD_DIGEST_CHANNEL_ID'),
-      realtimeChannelId: process.env.DISCORD_REALTIME_CHANNEL_ID || '',
-      debugChannelId: process.env.DISCORD_DEBUG_CHANNEL_ID || '',
-      debugCooldownMs: integer('DISCORD_DEBUG_COOLDOWN_MINUTES', 60) * 60 * 1000
-    },
-    followup: loadFollowupConfig(),
     digest: {
       timezone: process.env.DIGEST_TIMEZONE || 'Australia/Sydney',
       cron: process.env.DIGEST_CRON || '0 19 * * *',
@@ -103,6 +101,45 @@ export function loadConfig(): AppConfig {
       path: process.env.SQLITE_PATH || 'data/hedwig.db'
     }
   };
+
+  if (messagingProvider === 'telegram') {
+    return { ...common, messagingProvider, telegram: loadTelegramConfig() };
+  }
+  return {
+    ...common,
+    messagingProvider,
+    discord: {
+      botToken: required('DISCORD_BOT_TOKEN'),
+      digestChannelId: required('DISCORD_DIGEST_CHANNEL_ID'),
+      realtimeChannelId: process.env.DISCORD_REALTIME_CHANNEL_ID || '',
+      debugChannelId: process.env.DISCORD_DEBUG_CHANNEL_ID || '',
+      debugCooldownMs: integer('DISCORD_DEBUG_COOLDOWN_MINUTES', 60) * 60 * 1000
+    },
+    followup: loadFollowupConfig()
+  };
+}
+
+function loadTelegramConfig(): TelegramConfig {
+  const botToken = required('TELEGRAM_BOT_TOKEN').trim();
+  if (!/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) throw new Error('TELEGRAM_BOT_TOKEN has an invalid format');
+  const debugChatId = process.env.TELEGRAM_DEBUG_CHAT_ID?.trim();
+  return {
+    botToken,
+    ownerUserId: telegramId('TELEGRAM_OWNER_USER_ID', required('TELEGRAM_OWNER_USER_ID')),
+    chatId: telegramId('TELEGRAM_CHAT_ID', required('TELEGRAM_CHAT_ID')),
+    debugChatId: debugChatId ? telegramId('TELEGRAM_DEBUG_CHAT_ID', debugChatId, true) : null,
+    debugCooldownMs: integer('TELEGRAM_DEBUG_COOLDOWN_MINUTES', 60) * 60 * 1000
+  };
+}
+
+function telegramId(name: string, raw: string, group = false): number {
+  const value = raw.trim();
+  const id = Number(value);
+  const pattern = group ? /^-[1-9]\d*$/ : /^[1-9]\d*$/;
+  if (!pattern.test(value) || !Number.isSafeInteger(id)) {
+    throw new Error(`${name} must be a ${group ? 'negative group' : 'positive private'} Telegram ID`);
+  }
+  return id;
 }
 
 function fallbackLlmConfig(): LlmClassifierConfig | undefined {

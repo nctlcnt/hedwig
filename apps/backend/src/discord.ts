@@ -1,4 +1,5 @@
-import type { AppConfig, Category, ClassifierFailure, DigestItem, DigestReport, DigestSection } from './types.js';
+import type { DiscordAppConfig, Category, ClassifierFailure, DigestItem, DigestReport, DigestSection } from './types.js';
+import { DeliveryError, type DeliveryPart, type DeliveryRequest, type OperationalAlert } from './notifications/notifier.js';
 
 const DISCORD_API = 'https://discord.com/api/v10';
 const REPORT_CATEGORIES: Category[] = ['action', 'fyi', 'course', 'admin'];
@@ -15,16 +16,17 @@ const SECTION_DESCRIPTION_BUDGET = 3800;
 const MAX_ACTION_ROWS = 5;
 const MAX_BUTTONS_PER_MESSAGE = 25;
 const THREAD_AUTO_ARCHIVE_MINUTES = 1440;
+const REQUEST_TIMEOUT_MS = 20_000;
+const THREAD_ALREADY_EXISTS = 160004;
 
-type CreatedMessage = { id: string };
+type DiscordDelivery = { kind: 'message'; body: object } | { kind: 'thread'; name: string };
 
-export async function sendDiscordDigest(config: AppConfig, digest: DigestReport): Promise<void> {
-  const root = await postMessage(config, config.discord.digestChannelId, summaryMessage(digest));
-  if (digest.total === 0) return;
+export function planDiscordDigest(digest: DigestReport): DeliveryPart[] {
+  const parts = [discordPart('summary', { kind: 'message', body: summaryMessage(digest) })];
+  if (digest.total === 0) return parts;
 
-  const threadId = await startThread(config, config.discord.digestChannelId, root.id, threadName(digest));
+  parts.push(discordPart('thread', { kind: 'thread', name: threadName(digest) }, 'summary'));
   const numbers = reportedItemNumbers(digest);
-  const failures: Error[] = [];
   for (const category of REPORT_CATEGORIES) {
     const section = digest.sections.find((entry) => entry.category === category);
     const items = section?.items || [];
@@ -33,25 +35,46 @@ export async function sendDiscordDigest(config: AppConfig, digest: DigestReport)
     for (let part = 0; part < chunks.length; part += 1) {
       const chunk = chunks[part];
       if (!chunk) continue;
-      try {
-        await postMessage(config, threadId, sectionMessage(category, section, items.length, chunk, numbers, part, chunks.length));
-      } catch (error) {
-        console.error(`Failed to post ${category} detail (part ${part + 1}/${chunks.length})`, error);
-        failures.push(error instanceof Error ? error : new Error(String(error)));
-      }
+      const body = sectionMessage(category, section, items.length, chunk, numbers, part, chunks.length);
+      parts.push(discordPart(`${category}:${part + 1}`, { kind: 'message', body }, 'thread'));
     }
   }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, `Failed to post ${failures.length} Discord digest detail message(s)`);
-  }
+  return parts;
 }
 
-export async function sendDiscordRealtime(config: AppConfig, item: DigestItem): Promise<void> {
+export function planDiscordRealtime(item: DigestItem): DeliveryPart {
+  return discordPart('message', { kind: 'message', body: realtimeMessage(item) });
+}
+
+function discordPart(key: string, payload: DiscordDelivery, after?: string): DeliveryPart {
+  return { key, after, payload };
+}
+
+export async function sendDiscordDelivery(config: DiscordAppConfig, request: DeliveryRequest): Promise<string> {
+  const { destination, parentMessageId } = request;
+  const payload = request.payload as DiscordDelivery;
+  if (payload.kind === 'message') {
+    return postMessage(config, parentMessageId ?? destination, payload.body);
+  }
+  if (payload.kind === 'thread' && parentMessageId) {
+    return postDiscord(config, `/channels/${destination}/messages/${parentMessageId}/threads`, {
+      name: payload.name,
+      auto_archive_duration: THREAD_AUTO_ARCHIVE_MINUTES
+    }, parentMessageId);
+  }
+  throw new Error('Invalid Discord delivery payload');
+}
+
+export async function sendDiscordRealtime(config: DiscordAppConfig, item: DigestItem): Promise<void> {
   if (!config.discord.realtimeChannelId) {
     console.info(`Skipping realtime push for ${item.mailId}: DISCORD_REALTIME_CHANNEL_ID not set`);
     return;
   }
-  await postMessage(config, config.discord.realtimeChannelId, withActionRows({
+  await postMessage(config, config.discord.realtimeChannelId, realtimeMessage(item));
+}
+
+function realtimeMessage(item: DigestItem) {
+  return withActionRows({
     content: null,
     embeds: [{
       title: '需要及时查看的邮件',
@@ -65,17 +88,15 @@ export async function sendDiscordRealtime(config: AppConfig, item: DigestItem): 
       timestamp: new Date().toISOString()
     }],
     allowed_mentions: { parse: [] }
-  }, [item]));
+  }, [item]);
 }
 
 const MAX_ALERT_ITEMS = 10;
 
-// Low-level poster for the operational/debug channel. Throttling is the
-// caller's responsibility (see reportProblem in alerts.ts); this just renders
-// the embed and no-ops when no debug channel is configured.
-export async function sendDiscordDebug(config: AppConfig, title: string, detail: string): Promise<void> {
+export async function sendDiscordAlert(config: DiscordAppConfig, alert: OperationalAlert): Promise<void> {
   const channelId = config.discord.debugChannelId;
   if (!channelId) return;
+  const { title, detail } = renderAlert(alert);
   await postMessage(config, channelId, {
     content: null,
     embeds: [{
@@ -88,13 +109,25 @@ export async function sendDiscordDebug(config: AppConfig, title: string, detail:
   });
 }
 
-// Builds (but does not post) the classifier-fallback alert. The signature is
-// the distinct failure reasons, so a persistent outage dedupes run-to-run while
-// a genuinely new failure mode alerts again.
-export function buildClassifierFailureAlert(
+function renderAlert(alert: OperationalAlert): { title: string; detail: string } {
+  switch (alert.kind) {
+    case 'job-failure':
+      return { title: alert.title, detail: alert.detail };
+    case 'account-failure':
+      return {
+        title: `账号处理失败：${alert.accountName}`,
+        detail: `账号 **${alert.accountName}** (${alert.accountEmail}) 本轮处理失败：\n${alert.detail}`
+      };
+    case 'classifier-fallback':
+      return renderClassifierFailureAlert(alert.account, alert.failures, alert.reasons);
+  }
+}
+
+function renderClassifierFailureAlert(
   account: string,
-  failures: ClassifierFailure[]
-): { signature: string; title: string; detail: string } {
+  failures: ClassifierFailure[],
+  reasons: string[]
+): { title: string; detail: string } {
   const shown = failures.slice(0, MAX_ALERT_ITEMS);
   const lines = shown.map((failure) => (
     `• **${displaySender(failure.from)}** · ${escapeMarkdown(alertSubject(failure.subject))}\n  [打开 Gmail](${failure.gmailUrl})`
@@ -102,11 +135,9 @@ export function buildClassifierFailureAlert(
   const moreLine = failures.length > MAX_ALERT_ITEMS
     ? [`…还有 ${failures.length - MAX_ALERT_ITEMS} 封`]
     : [];
-  const reasons = [...new Set(failures.map((failure) => failure.reason).filter(Boolean))].slice(0, 3);
   const reasonLine = reasons.length > 0 ? ['', `原因：${escapeMarkdown(reasons.join(' / ')).slice(0, 400)}`] : [];
 
   return {
-    signature: `classifier-fallback|${reasons.join(' / ')}`,
     title: `⚠️ ${failures.length} 封邮件 AI 分类失败（已用规则兜底）`,
     detail: [
       `账号 **${escapeMarkdown(account)}**：以下邮件的 AI 分类失败，已退回规则分类，可能不准确，请手动确认是否需要处理。`,
@@ -124,43 +155,45 @@ function alertSubject(subject: string): string {
   return raw.length > 90 ? `${raw.slice(0, 88)}…` : raw;
 }
 
-function authHeaders(config: AppConfig): Record<string, string> {
+function authHeaders(config: DiscordAppConfig): Record<string, string> {
   return {
     Authorization: `Bot ${config.discord.botToken}`,
     'Content-Type': 'application/json'
   };
 }
 
-async function postMessage(config: AppConfig, channelId: string, body: unknown): Promise<CreatedMessage> {
+async function postMessage(config: DiscordAppConfig, channelId: string, body: object): Promise<string> {
   if (!channelId) {
     throw new Error('Discord channel id is required');
   }
-  const response = await fetch(`${DISCORD_API}/channels/${channelId}/messages`, {
-    method: 'POST',
-    headers: authHeaders(config),
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Discord message failed: ${response.status} ${errorBody}`);
-  }
-  return await response.json() as CreatedMessage;
+  return postDiscord(config, `/channels/${channelId}/messages`, body);
 }
 
-async function startThread(config: AppConfig, channelId: string, messageId: string, name: string): Promise<string> {
-  const response = await fetch(`${DISCORD_API}/channels/${channelId}/messages/${messageId}/threads`, {
-    method: 'POST',
-    headers: authHeaders(config),
-    body: JSON.stringify({ name, auto_archive_duration: THREAD_AUTO_ARCHIVE_MINUTES })
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Discord thread create failed: ${response.status} ${errorBody}`);
+async function postDiscord(config: DiscordAppConfig, path: string, body: object, sourceMessageId?: string): Promise<string> {
+  const json = JSON.stringify(body);
+  let response: Response;
+  try {
+    response = await fetch(`${DISCORD_API}${path}`, {
+      method: 'POST',
+      headers: authHeaders(config),
+      body: json,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    });
+  } catch {
+    throw new DeliveryError('network');
   }
-  const thread = await response.json() as { id: string };
-  return thread.id;
+
+  const payload = await response.json().catch(() => null) as { id?: string; code?: number; retry_after?: number } | null;
+  if (!response.ok) {
+    // A thread started from a message shares that message's ID, even when the
+    // creation succeeded during an earlier attempt that lost its response.
+    if (sourceMessageId && payload?.code === THREAD_ALREADY_EXISTS) return sourceMessageId;
+    const hints = [Number(response.headers.get('Retry-After')), payload?.retry_after ?? 0];
+    const retryAfterMs = Math.ceil(Math.max(0, ...hints.filter(Number.isFinite)) * 1000);
+    throw new DeliveryError(response.status, Number.isSafeInteger(retryAfterMs) ? retryAfterMs : 0);
+  }
+  if (typeof payload?.id !== 'string' || !payload.id) throw new DeliveryError('invalid-response');
+  return payload.id;
 }
 
 function threadName(digest: DigestReport): string {

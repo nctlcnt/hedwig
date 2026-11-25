@@ -1,30 +1,17 @@
 import { isAlertOnCooldown, recordAlertSent } from './db.js';
-import { sendDiscordDebug } from './discord.js';
 import type { HedwigDb } from './db.js';
-import type { AppConfig } from './types.js';
+import type { Notifier, OperationalAlert } from './notifications/notifier.js';
 
-export type Problem = {
-  // Stable identity used for dedup. The same signature is silenced for the
-  // cooldown window after it fires; a different signature alerts immediately.
-  signature: string;
-  title: string;
-  detail: string;
-};
-
-// Routes an operational problem to the Discord debug channel, deduped by
-// signature over config.discord.debugCooldownMs. This function never throws and
-// never re-reports its own failures, so alerting can neither break nor recurse
-// into the pipeline it observes. A no-op when no debug channel is configured.
-export async function reportProblem(config: AppConfig, db: HedwigDb, problem: Problem): Promise<void> {
+// Deduplicates alerts by signature after a successful send. Failed alerts are
+// logged locally so they cannot break the pipeline or trigger another alert.
+export async function reportProblem(notifier: Notifier, db: HedwigDb, problem: OperationalAlert): Promise<void> {
   try {
-    if (!config.discord.debugChannelId) return;
-    if (isAlertOnCooldown(db, problem.signature, config.discord.debugCooldownMs)) return;
-    await sendDiscordDebug(config, problem.title, problem.detail);
-    // Start the cooldown only after a successful send, so a failed post retries
-    // next run instead of being silenced for the whole window.
+    const cooldown = notifier.alertCooldownMs;
+    if (cooldown === null || isAlertOnCooldown(db, problem.signature, cooldown)) return;
+    await notifier.sendOperationalAlert(problem);
     recordAlertSent(db, problem.signature);
   } catch (error) {
-    console.error('Failed to report problem to debug channel', error);
+    console.error('Failed to send operational alert', error);
   }
 }
 
