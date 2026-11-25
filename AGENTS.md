@@ -4,7 +4,7 @@
 
 Hedwig is a Node 20 TypeScript workspace. The current product surface is backend-only.
 
-- `apps/backend/src/`: Gmail, Discord, digest, database, config, and classifier code.
+- `apps/backend/src/`: Gmail, Telegram, notification outbox, digest, database, config, and classifier code.
 - `apps/backend/src/llm/`: Gemini-backed classifier implementation.
 - `apps/backend/prompts/`: LLM prompt text, including `email-classifier.md`.
 - `apps/backend/scripts/`: one-off setup scripts such as Google OAuth token generation.
@@ -50,7 +50,7 @@ Prefer `verb + object + outcome` titles, for example:
 
 - `Fetch unread Gmail messages for digesting`
 - `Classify emails with Gemini provider`
-- `Send daily digest to Discord`
+- `Send daily digest to Telegram`
 - `Write confirmed email events to Google Calendar`
 
 ## Commit & Pull Request Guidelines
@@ -100,7 +100,7 @@ End with `Fixes HED-123` on its own line.
 
 ## Security & Configuration Tips
 
-Copy `.env.example` to `.env` and keep secrets out of git. Required integrations include Gmail OAuth credentials and Discord bot/channel values; DeepSeek is optional when `CLASSIFIER_PROVIDER=rule`. The Gmail scope should remain `https://www.googleapis.com/auth/gmail.modify`; the service labels messages and marks digested messages read, but must not reply, delete, archive, trash, or access Drive.
+Copy `.env.example` to `.env` and keep secrets out of git. Required integrations include Gmail OAuth credentials and Telegram bot/chat values; DeepSeek is optional when `CLASSIFIER_PROVIDER=rule`. The Gmail scope should remain `https://www.googleapis.com/auth/gmail.modify`; the service labels messages and marks digested messages read, but must not reply, delete, archive, trash, or access Drive.
 
 ## Linear connection
 本项目的 issue 跟踪在 Linear 上

@@ -3,25 +3,6 @@ import type { gmail_v1 } from 'googleapis';
 export type Category = 'action' | 'fyi' | 'course' | 'admin' | 'junk';
 export type ProcessingOutcome = 'suppress' | 'digest_only' | 'push_now';
 
-export type AppConfig = DiscordAppConfig | TelegramAppConfig;
-
-export type DiscordAppConfig = CommonAppConfig & {
-  messagingProvider: 'discord';
-  discord: {
-    botToken: string;
-    digestChannelId: string;
-    realtimeChannelId: string;
-    debugChannelId: string;
-    debugCooldownMs: number;
-  };
-  followup: FollowupConfig;
-};
-
-export type TelegramAppConfig = CommonAppConfig & {
-  messagingProvider: 'telegram';
-  telegram: TelegramConfig;
-};
-
 export type TelegramConfig = {
   botToken: string;
   ownerUserId: number;
@@ -30,7 +11,7 @@ export type TelegramConfig = {
   debugCooldownMs: number;
 };
 
-type CommonAppConfig = {
+export type AppConfig = {
   google: {
     clientId: string;
     clientSecret: string;
@@ -60,11 +41,7 @@ type CommonAppConfig = {
   database: {
     path: string;
   };
-};
-
-export type FollowupConfig = {
-  enabled: boolean;
-  forumChannelId: string;
+  telegram: TelegramConfig;
 };
 
 export type LlmClassifierConfig = {
@@ -158,7 +135,6 @@ export type DigestSection = {
   category: Category;
   title: string;
   items: DigestItem[];
-  lead?: string;
 };
 
 export type DigestAccountSummary = {

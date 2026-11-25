@@ -588,7 +588,7 @@ values (...)
 on conflict(account_id, gmail_id) do update set ...
 ```
 
-仓库里已经有现成的先例可以直接参考：`followup-store.ts` 的 `reserveFollowup` 用的正是 `insert ... on conflict(account_id, gmail_thread_id) do nothing` 这种占位写入模式，冲突处理的写法可以照抄。
+（Step 1 已完成，当前的 upsert 写法见 `db.ts` 的 `saveClassification`。原先参考的 `followup-store.ts` 已随 follow-up 功能一起移除。）
 
 迁移方式沿用 `db.ts` 里已有的“重建表 + 迁移旧数据”模式（参考文件中对 `message_classifications_legacy_*` 的处理），不引入新的迁移框架。
 
@@ -655,13 +655,13 @@ batchId
 
 避免敏感邮件内容泄漏。
 
-### 18.1 和现有 Discord 告警的关系
+### 18.1 和现有运维告警的关系
 
-现在 `runAccountClassificationPass` 只在某封邮件的 `classification.provider === 'rule-fallback'` 时才把它推进 `classifierFailures`（`digest.ts:139-146`），通过 `notifyClassifierFailures` 发到 Discord 的 debug 频道（`digest.ts:158`）。这条判断只覆盖"LLM 调用本身失败、最终退到规则分类器"这一种情况。
+现在 `runAccountClassificationPass` 只在某封邮件的 `classification.provider === 'rule-fallback'` 时才把它推进 `classifierFailures`（`digest.ts:139-146`），通过 `notifyClassifierFailures` 发到运维报警渠道（Telegram 运维群 `TELEGRAM_DEBUG_CHAT_ID`）。这条判断只覆盖"LLM 调用本身失败、最终退到规则分类器"这一种情况。
 
 batch 化之后还会出现一种新情况：LLM 调用本身成功，但返回结果里某封邮件的 item 被 batch validation 判定为 missing / unknown emailId / invalid schema（第 12 节），随后单封 retry 用真实 LLM 成功分类——这种邮件最终的 `provider` 不是 `rule-fallback`，不会触发现有告警，但"batch 把这封邮件的结果搞丢了"本身是一个值得运营关注的信号（可能意味着 prompt、schema 或 body truncation 有问题）。
 
-因此这一节的 `classification_item_fallback` 日志事件触发时，需要同时调用 `classifierFailures.push(...)` / `notifyClassifierFailures`，和现有 `rule-fallback` 判断走同一条 Discord 告警路径，而不是只留在新 metrics 里、需要单独查看才能发现。
+因此这一节的 `classification_item_fallback` 日志事件触发时，需要同时调用 `classifierFailures.push(...)` / `notifyClassifierFailures`，和现有 `rule-fallback` 判断走同一条运维告警路径，而不是只留在新 metrics 里、需要单独查看才能发现。
 
 ## 19. Metrics
 
@@ -1037,7 +1037,7 @@ classifier: {
 按第 16 节，提前到最前面做，因为后面只要涉及往 `message_classifications` 写数据，都要建立在幂等写入之上：
 
 1. 给 `message_classifications` 加 `unique(account_id, gmail_id)`（沿用 `db.ts` 里已有的表重建迁移模式）。
-2. `saveClassification` 改成 `insert ... on conflict(account_id, gmail_id) do update`，写法参考 `followup-store.ts` 的 `reserveFollowup`。
+2. `saveClassification` 改成 `insert ... on conflict(account_id, gmail_id) do update`。
 
 这一步完成后，单邮件路径本身行为不变；在 `db.test.ts` 里补一个"同一 `(account_id, gmail_id)` 写两次，最终只留一行"的用例验证迁移生效。
 
@@ -1140,11 +1140,11 @@ fallback
 success
 ```
 
-`classification_item_fallback` 触发时同时接入现有 `classifierFailures` / `notifyClassifierFailures` 的 Discord 告警路径（见第 18.1 节），不要只写进新 metrics。
+`classification_item_fallback` 触发时同时接入现有 `classifierFailures` / `notifyClassifierFailures` 的运维告警路径（见第 18.1 节），不要只写进新 metrics。
 
 ### Step 11 — 建 regression dataset
 
-写一个一次性脚本（参照 `scripts/followup-dry-run.ts` 这类现有 dry-run 脚本的写法），从当前账号的 Gmail 或本地 `messages` / `message_classifications` 表里，按第 21 节要求的类别、语言、长度维度做分层抽样，抽 50~100 封；对每一封重新跑一次现有单邮件 `classify()`，把 `{ emailId, 邮件关键字段, baseline classification }` 写成本地 JSON 文件，存到 `data/regression/`。这个目录和现有 `data/` 一样整个 gitignore（`.gitignore:13`），因为里面是真实邮件内容，不能提交进仓库。这份文件是 Step 12 比较用的基准。
+写一个一次性脚本（参照 `apps/backend/scripts/` 下现有脚本的写法），从当前账号的 Gmail 或本地 `messages` / `message_classifications` 表里，按第 21 节要求的类别、语言、长度维度做分层抽样，抽 50~100 封；对每一封重新跑一次现有单邮件 `classify()`，把 `{ emailId, 邮件关键字段, baseline classification }` 写成本地 JSON 文件，存到 `data/regression/`。这个目录和现有 `data/` 一样整个 gitignore（`.gitignore:13`），因为里面是真实邮件内容，不能提交进仓库。这份文件是 Step 12 比较用的基准。
 
 ### Step 12 — 离线 regression 对比
 

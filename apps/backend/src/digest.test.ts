@@ -7,21 +7,19 @@ import { createOutboxDrain } from './notifications/outbox-worker.js';
 import type { AppConfig, DigestReport, EmailMessage } from './types.js';
 
 const config: AppConfig = {
-  messagingProvider: 'discord',
   google: {
     clientId: '',
     clientSecret: '',
     redirectUri: '',
     accounts: []
   },
-  discord: {
+  telegram: {
     botToken: '',
-    digestChannelId: '',
-    realtimeChannelId: '',
-    debugChannelId: '',
+    ownerUserId: 1,
+    chatId: 1,
+    debugChatId: null,
     debugCooldownMs: 60 * 60 * 1000
   },
-  followup: { enabled: false, forumChannelId: '' },
   digest: {
     timezone: 'UTC',
     cron: '0 19 * * *',

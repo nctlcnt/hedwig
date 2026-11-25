@@ -1,12 +1,6 @@
 import 'dotenv/config';
 import { existsSync, readFileSync } from 'node:fs';
-import type {
-  AppConfig,
-  FollowupConfig,
-  GmailAccountConfig,
-  LlmClassifierConfig,
-  TelegramConfig
-} from './types.js';
+import type { AppConfig, GmailAccountConfig, LlmClassifierConfig, TelegramConfig } from './types.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -26,41 +20,11 @@ function integer(name: string, fallback: number): number {
   return parsed;
 }
 
-function boolean(name: string, fallback: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env[name];
-  if (!raw) return fallback;
-
-  if (raw.trim().toLowerCase() === 'true') return true;
-  if (raw.trim().toLowerCase() === 'false') return false;
-  throw new Error(`${name} must be "true" or "false"`);
-}
-
-export function loadFollowupConfig(env: NodeJS.ProcessEnv = process.env): FollowupConfig {
-  const enabled = boolean('FOLLOWUP_ENABLED', false, env);
-  if (!enabled) {
-    return {
-      enabled: false,
-      forumChannelId: ''
-    };
-  }
-
-  const forumChannelId = env.DISCORD_FOLLOWUP_FORUM_CHANNEL_ID?.trim();
-  if (!forumChannelId) {
-    throw new Error(
-      'Missing required environment variable when FOLLOWUP_ENABLED=true: DISCORD_FOLLOWUP_FORUM_CHANNEL_ID'
-    );
-  }
-
-  return {
-    enabled: true,
-    forumChannelId
-  };
-}
-
 export function loadConfig(): AppConfig {
-  const messagingProvider = process.env.MESSAGING_PROVIDER ?? 'discord';
-  if (messagingProvider !== 'discord' && messagingProvider !== 'telegram') {
-    throw new Error('MESSAGING_PROVIDER must be "discord" or "telegram"');
+  // Discord delivery was removed; reject a stale setting instead of silently ignoring it.
+  const messagingProvider = process.env.MESSAGING_PROVIDER?.trim();
+  if (messagingProvider && messagingProvider !== 'telegram') {
+    throw new Error('MESSAGING_PROVIDER is no longer supported except "telegram"; Discord delivery was removed');
   }
 
   const rawProvider = process.env.CLASSIFIER_PROVIDER
@@ -70,7 +34,7 @@ export function loadConfig(): AppConfig {
     throw new Error(`CLASSIFIER_PROVIDER must be "rule", "openai-compatible", or legacy "deepseek", got: ${rawProvider}`);
   }
 
-  const common: Omit<AppConfig, 'messagingProvider'> = {
+  return {
     google: {
       clientId: required('GOOGLE_CLIENT_ID'),
       clientSecret: required('GOOGLE_CLIENT_SECRET'),
@@ -99,23 +63,8 @@ export function loadConfig(): AppConfig {
     },
     database: {
       path: process.env.SQLITE_PATH || 'data/hedwig.db'
-    }
-  };
-
-  if (messagingProvider === 'telegram') {
-    return { ...common, messagingProvider, telegram: loadTelegramConfig() };
-  }
-  return {
-    ...common,
-    messagingProvider,
-    discord: {
-      botToken: required('DISCORD_BOT_TOKEN'),
-      digestChannelId: required('DISCORD_DIGEST_CHANNEL_ID'),
-      realtimeChannelId: process.env.DISCORD_REALTIME_CHANNEL_ID || '',
-      debugChannelId: process.env.DISCORD_DEBUG_CHANNEL_ID || '',
-      debugCooldownMs: integer('DISCORD_DEBUG_COOLDOWN_MINUTES', 60) * 60 * 1000
     },
-    followup: loadFollowupConfig()
+    telegram: loadTelegramConfig()
   };
 }
 

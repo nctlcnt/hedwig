@@ -1,6 +1,6 @@
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import type { HedwigDb } from '../db.js';
-import type { TelegramAppConfig } from '../types.js';
+import type { AppConfig } from '../types.js';
 import { telegramRequest, type TelegramApi } from '../telegram/api.js';
 import { isTelegramChatReady, telegramDestination, type TelegramPrivateChat } from '../telegram/store.js';
 import { gmailButton, limitTelegramText, telegramDigestOverview, telegramMessagePart, viewButton, type TelegramMessage } from '../telegram/views.js';
@@ -8,7 +8,7 @@ import type { Notifier, OperationalAlert } from './notifier.js';
 
 export function createTelegramNotifier(
   db: HedwigDb,
-  config: TelegramAppConfig,
+  config: AppConfig,
   botId: number,
   api: TelegramApi
 ): Notifier {

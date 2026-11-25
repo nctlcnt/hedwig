@@ -9,15 +9,12 @@
     "digest:daemon": "tsx apps/backend/src/index.ts daemon",
     "messaging:check": "tsx apps/backend/scripts/check-messaging.ts",
     "probe:deepseek": "tsx apps/backend/scripts/deepseek-probe.ts",
-    "dry-run:preview": "tsx apps/backend/scripts/preview-dry-run.ts",
-    "dry-run:followup": "tsx apps/backend/scripts/followup-dry-run.ts",
     "cleanup": "tsx apps/backend/scripts/cleanup.ts",
-    "test": "tsx apps/backend/src/alerts.test.ts && tsx apps/backend/src/db.test.ts && tsx apps/backend/src/classifier.test.ts && tsx apps/backend/src/classification-batch.test.ts && tsx apps/backend/src/classification-batch-validation.test.ts && tsx apps/backend/src/digest.test.ts && tsx apps/backend/src/gmail.test.ts && tsx apps/backend/src/summary-language.test.ts && tsx apps/backend/src/followup-config.test.ts && tsx apps/backend/src/followup-store.test.ts && tsx apps/backend/src/llm/openai-compatible-classifier.test.ts && tsx apps/backend/src/config.test.ts && tsx apps/backend/src/notifications/outbox.test.ts && tsx apps/backend/src/telegram/poller.test.ts",
+    "test": "tsx apps/backend/src/alerts.test.ts && tsx apps/backend/src/db.test.ts && tsx apps/backend/src/classifier.test.ts && tsx apps/backend/src/classification-batch.test.ts && tsx apps/backend/src/classification-batch-validation.test.ts && tsx apps/backend/src/digest.test.ts && tsx apps/backend/src/gmail.test.ts && tsx apps/backend/src/summary-language.test.ts && tsx apps/backend/src/llm/openai-compatible-classifier.test.ts && tsx apps/backend/src/config.test.ts && tsx apps/backend/src/notifications/outbox.test.ts && tsx apps/backend/src/telegram/poller.test.ts",
     "check": "tsc --noEmit"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",
-    "discord.js": "^14.26.4",
     "dotenv": "^16.4.5",
     "googleapis": "^171.4.0",
     "grammy": "^1.46.0",

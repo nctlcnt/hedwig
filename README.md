@@ -1,26 +1,22 @@
 # Hedwig
 
-A personal Gmail digest assistant for Discord and Telegram.
+A personal Gmail digest assistant delivered through a private Telegram bot chat.
 
 Hedwig reads new inbox mail, classifies it, stores workflow state in SQLite, and
-delivers realtime alerts and daily digests through the configured provider. Gmail access is
+delivers realtime alerts and daily digests to the owner's Telegram chat. Gmail access is
 read-only: mailbox state is never used as Hedwig's workflow state.
 
 ## Features
 
 - Multiple Gmail accounts with independent History API cursors
 - SQLite-backed deduplication, classifications, summaries, and sync state
-- Realtime Discord alerts for high-priority messages
-- Daily Discord digests with detailed threads
+- Realtime Telegram alerts for high-priority messages
+- A daily Telegram overview with category, message, and body pages on demand
+- A SQLite outbox that retries deliveries after network errors and rate limits
 - One-sentence summaries, attention points, and suggested actions
-- Ephemeral email previews with useful links and Gmail navigation
 - Seven-day local body cache with automatic expiry
 - Rule-based classification with optional OpenAI-compatible LLM support
-- Configurable summary language through `/summary-language`
-- Optional Conversation, Todo, and Read later tracking in a Discord Forum
-
-Track and idempotent Forum creation are available. Conversation hydration,
-rolling summaries, Done, and reconcile are still under development.
+- Configurable summary language through `/summary_language`
 
 ## Safety
 
@@ -38,7 +34,7 @@ Suppressed junk and one-time codes remain unchanged in Gmail.
 
 - Node.js 20 or newer
 - Google OAuth credentials with Gmail API access
-- A Discord bot and digest channel or a Telegram bot and owner private chat
+- A Telegram bot and the owner's private chat with it
 
 ## Quick start
 
@@ -50,7 +46,7 @@ cp .env.example .env
 npm install
 ```
 
-Set the Google OAuth and messaging provider values in `.env`, then authorize a Gmail
+Set the Google OAuth and Telegram values in `.env`, then authorize a Gmail
 account:
 
 ```bash
@@ -58,7 +54,9 @@ npm run google:auth -- main "Main Gmail"
 ```
 
 The authorization script creates the local account and token files used by the
-default multi-account configuration. Run one processing cycle:
+default multi-account configuration. Refresh tokens are read only at startup, so
+restart a running daemon after re-authorizing an account. Run one processing
+cycle:
 
 ```bash
 npm run digest:once
@@ -82,15 +80,10 @@ The main settings are:
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
 | `GMAIL_ACCOUNTS_JSON` | Local multi-account configuration file |
-| `MESSAGING_PROVIDER` | `discord` by default, or `telegram` for private-chat delivery |
-| `DISCORD_BOT_TOKEN` | Discord bot token |
-| `DISCORD_DIGEST_CHANNEL_ID` | Daily digest destination |
-| `DISCORD_REALTIME_CHANNEL_ID` | Optional realtime alert destination |
-| `DISCORD_DEBUG_CHANNEL_ID` | Optional operational alert destination |
 | `TELEGRAM_BOT_TOKEN` | Token for the Telegram bot |
 | `TELEGRAM_OWNER_USER_ID` | Allowed numeric Telegram user ID |
 | `TELEGRAM_CHAT_ID` | Allowed private chat ID |
-| `TELEGRAM_DEBUG_CHAT_ID` | Optional private group for operational alerts |
+| `TELEGRAM_DEBUG_CHAT_ID` | Private group for operational alerts; recommended |
 | `DIGEST_TIMEZONE` | Digest schedule timezone |
 | `DIGEST_CRON` | Daily digest cron expression |
 | `DIGEST_PROCESS_CRON` | Gmail History polling cron expression |
@@ -106,6 +99,10 @@ separate bot token and SQLite database for a test instance.
 Run `npm run messaging:check` to validate settings, including Telegram bot
 credentials and webhook status, without syncing Gmail or sending messages.
 
+Without `TELEGRAM_DEBUG_CHAT_ID`, operational problems such as a failing Gmail
+account are not pushed anywhere; each one is only written to the service log as
+`Operational alert not sent (no alert destination configured)`.
+
 ### Natural-language classification rules
 
 Copy `config/classifier-rules.example.md` to `config/classifier-rules.md`, or set
@@ -115,28 +112,6 @@ plain-language rules for categories, importance, summaries, and routing.
 These rules become part of the classifier prompt. Their quality is not
 automatically validated, so test them with representative emails and your
 configured model before relying on the results.
-
-### Follow-up Forum
-
-Follow-up support is opt-in:
-
-```text
-FOLLOWUP_ENABLED=false
-DISCORD_FOLLOWUP_FORUM_CHANNEL_ID=
-```
-
-When disabled, Hedwig ignores the Forum channel setting. When enabled, startup
-requires an accessible Discord Forum channel and validates it before scheduling
-mail jobs. Email previews then offer three tracking modes:
-
-- **Conversation** keeps one follow-up per Gmail thread and absorbs every
-  locally known message in that thread.
-- **Todo** creates a lightweight task from a reminder, bill, or other
-  single-message action.
-- **Read later** saves a newsletter or article with its summary and useful
-  links.
-
-Tracked message snapshots are stored in SQLite. Gmail remains read-only.
 
 ## Telegram behavior
 
@@ -154,24 +129,6 @@ list page. Urgent alerts also offer a details button and a Gmail link.
 Digest views and buttons expire after seven days. When a body cache entry has
 expired, the message can still be opened in Gmail.
 
-## Discord behavior
-
-The daily digest posts a compact overview and places full sections in a thread.
-Realtime alerts are sent separately when a realtime channel is configured.
-
-Email entries include a content-preview button. The ephemeral preview is served
-from SQLite and includes the summary, attention points, suggested actions, body
-text, useful links, and a Gmail link. Cached bodies expire after seven days.
-
-Server managers can set the language for future summaries:
-
-```text
-/summary-language language:English
-```
-
-The value is free text with a maximum length of 12 characters. Existing
-summaries are not rewritten.
-
 ## Commands
 
 | Command | Purpose |
@@ -180,8 +137,7 @@ summaries are not rewritten.
 | `npm run digest:once` | Process mail, queue today's digest, and attempt due deliveries |
 | `npm run digest:daemon` | Run History polling and digest schedules |
 | `npm run cleanup` | Delete expired local email body cache rows |
-| `npm run dry-run:preview` | Send a synthetic Discord preview |
-| `npm run dry-run:followup` | Send three synthetic follow-up scenarios |
+| `npm run messaging:check` | Validate Telegram settings without sending messages |
 | `npm run check` | Run TypeScript checks |
 | `npm test` | Run the backend test suite |
 
@@ -206,8 +162,8 @@ journalctl --user -u hedwig-digest.service -f
 ```text
 apps/backend/
   prompts/       Classifier prompts
-  scripts/       OAuth, cleanup, probe, and dry-run scripts
-  src/           Gmail, Discord, database, digest, and classifier code
+  scripts/       OAuth, cleanup, probe, and messaging-check scripts
+  src/           Gmail, Telegram, database, digest, and classifier code
     gateway/     Personal-data access interfaces and adapters
 apps/frontend/   Reserved for a future admin UI
 config/          Local account and classifier configuration

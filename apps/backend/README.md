@@ -1,6 +1,6 @@
 # Hedwig backend
 
-Node service for a read-only multi-account Gmail digest, Discord delivery, and classifier providers.
+Node service for a read-only multi-account Gmail digest, Telegram delivery, and classifier providers.
 
 Hedwig's mail flow depends on the internal `MailGateway` boundary instead of importing Gmail API helpers directly. The current gateway implementation is still Gmail-backed and uses the same OAuth/config/token files, but the product layer now treats personal mail access as a replaceable adapter.
 
@@ -9,15 +9,15 @@ New inbox mail is discovered through the Gmail History API: a per-account `histo
 Gmail is intentionally read-only:
 
 - History cursor discovers new Inbox messages.
-- SQLite tracks processing, suppression and future follow-up state.
+- SQLite tracks processing, suppression and delivery state.
 - Junk and disposable codes receive the DB-only `suppress` outcome and are
-  omitted from Discord output.
+  omitted from Telegram output.
 - Hedwig never changes Gmail read, star, label, Inbox or Trash state.
 
 Current providers:
 
 - `rule`: local conservative rules
-- `openai-compatible`: JSON-mode classification against any OpenAI-compatible endpoint (DeepSeek, GLM, …). Each call retries with exponential backoff (`CLASSIFIER_MAX_RETRIES`, `CLASSIFIER_TIMEOUT_MS`), which honors `Retry-After` so a 429 rate limit self-throttles rather than failing. Only once retries are exhausted does it try the optional backup LLM (`CLASSIFIER_FALLBACK_*`), then the rule classifier, and Hedwig posts a Discord alert listing any messages that fell back.
+- `openai-compatible`: JSON-mode classification against any OpenAI-compatible endpoint (DeepSeek, GLM, …). Each call retries with exponential backoff (`CLASSIFIER_MAX_RETRIES`, `CLASSIFIER_TIMEOUT_MS`), which honors `Retry-After` so a 429 rate limit self-throttles rather than failing. Only once retries are exhausted does it try the optional backup LLM (`CLASSIFIER_FALLBACK_*`), then the rule classifier, and Hedwig sends an operational alert counting the messages that fell back.
 
 Run from the repo root:
 
@@ -27,28 +27,19 @@ npm run digest:daemon
 npm run google:auth
 ```
 
-`digest:daemon` processes Gmail History updates every `DIGEST_PROCESS_CRON` interval, defaulting to `*/5 * * * *`, and sends the daily digest at `DIGEST_CRON`. Action-classified messages are pushed immediately to `DISCORD_REALTIME_CHANNEL_ID`; if that variable is unset the push is skipped and the message only surfaces in the next digest (no fallback to the digest channel, to avoid duplicate posts). Gmail mailbox state is never changed.
+`digest:daemon` processes Gmail History updates every `DIGEST_PROCESS_CRON` interval, defaulting to `*/5 * * * *`, and sends the daily digest at `DIGEST_CRON`. Action-classified messages are pushed immediately to the owner's Telegram chat. Every digest and alert is first written to the SQLite outbox (`notification_outbox`) in the same transaction as the classification, then delivered by a worker that retries network errors, 5xx and 429 responses with backoff, so a failed send never causes mail to be reclassified. Gmail mailbox state is never changed.
 
-Server managers can use `/summary-language language:<language>` in Discord to set
-the language for future LLM-generated message summaries, attention points,
-suggested actions, and daily section leads. The free-text value is limited to
-12 characters, persists in SQLite, and does not rewrite historical
-classifications. Each LLM classification emits exactly one summary sentence
-plus zero to three attention points and suggested actions; these structured
-details are shown in the ephemeral content preview.
+The owner can use `/summary_language <language>` in the Telegram chat to set
+the language for future LLM-generated message summaries, attention points, and
+suggested actions. The free-text value is limited to 12 characters, persists in
+SQLite, and does not rewrite historical classifications. Each LLM
+classification emits exactly one summary sentence plus zero to three attention
+points and suggested actions; these structured details are shown on the
+message detail page.
 
-Operational problems — cron exceptions, per-account processing failures, Discord send failures, and classifier rule-fallbacks — are posted to `DISCORD_DEBUG_CHANNEL_ID` when set. They are deduped by signature: the same problem is silenced for `DISCORD_DEBUG_COOLDOWN_MINUTES` (default 60) after it fires, so a persistent error pings once per window rather than every run. Leave the channel unset to disable.
+Operational problems — cron exceptions, per-account processing failures, delivery failures, and classifier rule-fallbacks — are sent to the private group `TELEGRAM_DEBUG_CHAT_ID` when set. They are deduped by signature: the same problem is silenced for `TELEGRAM_DEBUG_COOLDOWN_MINUTES` (default 60) after it fires. Alert texts never include mail content. Without the group, every occurrence is only logged as `Operational alert not sent (no alert destination configured)`.
 
-Follow-up support is disabled by default. With `FOLLOWUP_ENABLED=false`, the
-daemon does not require or validate `DISCORD_FOLLOWUP_FORUM_CHANNEL_ID`. With
-`FOLLOWUP_ENABLED=true`, that ID is required and the daemon checks after Discord
-login that the bot can access a `GuildForum` channel there. A missing,
-inaccessible, or non-Forum channel stops daemon startup before cron jobs are
-scheduled. Email previews then expose Conversation, Todo, and Read later
-tracking buttons. Track reserves one SQLite record per Gmail thread, snapshots
-every locally known message in the thread, and creates one idempotent Forum
-post. Historical thread hydration, rolling summaries, Done, and reconcile are
-still pending.
+Gmail refresh tokens are read once at startup; restart the daemon after running `npm run google:auth` for an existing account.
 
 The cron path (`digest:daemon` and `digest:once`) discovers new inbox mail incrementally via the Gmail History API cursor; only the bootstrap/recovery scan is bounded by `GMAIL_LOOKBACK_HOURS`.
 
@@ -56,8 +47,7 @@ The cron path (`digest:daemon` and `digest:once`) discovers new inbox mail incre
 
 ```bash
 npm run probe:deepseek         # synthetic classification, asserts provider=deepseek
-npm run dry-run:preview        # synthetic Discord preview backed by SQLite
-npm run dry-run:followup       # three synthetic Conversation/Todo/Read later scenarios
+npm run messaging:check        # validate Telegram credentials, polling mode and debug group
 npm run cleanup                # delete expired SQLite body/link cache rows
 ```
 
