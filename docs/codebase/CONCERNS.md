@@ -64,7 +64,7 @@ Churn counts come from tracked Git history over the last 90 days as inspected on
   and six Gmail cursors populated without a new processing failure.
 - `AGENTS.md` describes a Gemini-backed classifier and says no test runner is
   configured; current source uses a generic OpenAI-compatible provider and has
-  six test scripts.
+  seven test scripts.
 - LT-54, LT-57, LT-58, LT-60 and LT-74 were rewritten on 2026-07-25 to remove
   IMAP/Ollama/Haiku/Gemini and AUTO-label assumptions. Calendar-dependent
   LT-54/LT-60 remain explicitly paused.

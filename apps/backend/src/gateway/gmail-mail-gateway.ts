@@ -35,7 +35,7 @@ class GmailMailGateway implements MailGateway {
     return { refs: result.messages, cursor: result.cursor, reset: result.reset };
   }
 
-  async getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage> {
+  async getMessage(account: MailAccount, accountEmail: string, id: string): Promise<EmailMessage | null> {
     return getMessage(this.clientFor(account), this.configFor(account), accountEmail, id);
   }
 

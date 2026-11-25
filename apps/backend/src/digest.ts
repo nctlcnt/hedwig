@@ -128,6 +128,7 @@ async function runAccountClassificationPass(
       if (!ref.id) continue;
       if (alreadyProcessed.has(ref.id)) continue;
       const email = await mailGateway.getMessage(accountConfig, account, ref.id);
+      if (!email) continue;
       if (email.labelIds.includes('SPAM') || email.labelIds.includes('TRASH')) {
         continue;
       }

@@ -62,13 +62,14 @@ const gateway = new Proxy({
   syncInboxMessages: async (_account: unknown, options: { cursor: string | null }) => {
     cursors.push(options.cursor);
     return {
-      refs: [{ id: 'fyi-1' }, { id: 'junk-1' }],
+      refs: [{ id: 'fyi-1' }, { id: 'vanished-1' }, { id: 'junk-1' }],
       cursor: 'cursor-200',
       reset: options.cursor === null
     };
   },
   getMessage: async (_account: unknown, _accountEmail: string, id: string) => {
     messageFetches += 1;
+    if (id === 'vanished-1') return null;
     const message = messages.get(id);
     if (!message) throw new Error(`Missing test message ${id}`);
     return message;
@@ -86,7 +87,7 @@ const db = openDatabase(config);
 const first = await processUnreadMail(config, db, gateway);
 assert.equal(first[0]?.total, 2);
 assert.deepEqual(cursors, [null]);
-assert.equal(messageFetches, 2);
+assert.equal(messageFetches, 3);
 
 const outcomes = db.prepare(`
   select gmail_id as gmailId, processing_outcome as processingOutcome
@@ -110,7 +111,7 @@ assert.deepEqual(visible.map((item) => item.id), ['fyi-1']);
 const replay = await processUnreadMail(config, db, gateway);
 assert.equal(replay[0]?.total, 0);
 assert.deepEqual(cursors, [null, 'cursor-200']);
-assert.equal(messageFetches, 2);
+assert.equal(messageFetches, 4);
 const classificationCount = db.prepare('select count(*) as count from message_classifications').get() as { count: number };
 assert.equal(classificationCount.count, 2);
 

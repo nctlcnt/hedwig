@@ -36,7 +36,7 @@ frontend framework in the tracked source.
 |------|---------|----------|
 | TypeScript compiler | Strict type checking with `noUncheckedIndexedAccess`; no emit in verification | `tsconfig.json`, `package.json` |
 | `tsx` | Runs TypeScript entry points and assertion scripts directly | `package.json` |
-| Node `assert/strict` | Assertions in the six checked-in test scripts | `apps/backend/src/*.test.ts` |
+| Node `assert/strict` | Assertions in the seven checked-in test scripts | `apps/backend/src/*.test.ts` |
 
 No ESLint, Prettier, coverage tool or dedicated test-runner configuration is
 tracked.

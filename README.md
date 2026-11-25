@@ -17,10 +17,10 @@ read-only: mailbox state is never used as Hedwig's workflow state.
 - Seven-day local body cache with automatic expiry
 - Rule-based classification with optional OpenAI-compatible LLM support
 - Configurable summary language through `/summary-language`
-- Optional Discord Forum validation for the follow-up workflow
+- Optional Conversation, Todo, and Read later tracking in a Discord Forum
 
-The Track, Done, and reconcile parts of the follow-up workflow are still under
-development.
+Track and idempotent Forum creation are available. Conversation hydration,
+rolling summaries, Done, and reconcile are still under development.
 
 ## Safety
 
@@ -41,6 +41,9 @@ Suppressed junk and one-time codes remain unchanged in Gmail.
 - A Discord bot and digest channel
 
 ## Quick start
+
+> **Before you start:** Make sure you have your own Google OAuth credentials
+> with Gmail API access. This project does not generate them for you.
 
 ```bash
 cp .env.example .env
@@ -91,6 +94,16 @@ The main settings are:
 Account IDs must remain stable because they are part of the SQLite
 deduplication keys.
 
+### Natural-language classification rules
+
+Copy `config/classifier-rules.example.md` to `config/classifier-rules.md`, or set
+`CLASSIFIER_RULES_FILE` to another path. With the LLM classifier, you can write
+plain-language rules for categories, importance, summaries, and routing.
+
+These rules become part of the classifier prompt. Their quality is not
+automatically validated, so test them with representative emails and your
+configured model before relying on the results.
+
 ### Follow-up Forum
 
 Follow-up support is opt-in:
@@ -102,7 +115,16 @@ DISCORD_FOLLOWUP_FORUM_CHANNEL_ID=
 
 When disabled, Hedwig ignores the Forum channel setting. When enabled, startup
 requires an accessible Discord Forum channel and validates it before scheduling
-mail jobs.
+mail jobs. Email previews then offer three tracking modes:
+
+- **Conversation** keeps one follow-up per Gmail thread and absorbs every
+  locally known message in that thread.
+- **Todo** creates a lightweight task from a reminder, bill, or other
+  single-message action.
+- **Read later** saves a newsletter or article with its summary and useful
+  links.
+
+Tracked message snapshots are stored in SQLite. Gmail remains read-only.
 
 ## Discord behavior
 
@@ -131,6 +153,7 @@ summaries are not rewritten.
 | `npm run digest:daemon` | Run History polling and digest schedules |
 | `npm run cleanup` | Delete expired local email body cache rows |
 | `npm run dry-run:preview` | Send a synthetic Discord preview |
+| `npm run dry-run:followup` | Send three synthetic follow-up scenarios |
 | `npm run check` | Run TypeScript checks |
 | `npm test` | Run the backend test suite |
 

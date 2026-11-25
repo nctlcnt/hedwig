@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { syncInboxMessages } from './gmail.js';
-import type { GmailClient } from './types.js';
+import { getMessage, syncInboxMessages } from './gmail.js';
+import type { GmailAccountConfig, GmailClient } from './types.js';
 
 const calls: Array<string | undefined> = [];
 const gmail = {
@@ -48,5 +48,38 @@ assert.deepEqual(calls, [undefined, 'page-2']);
 assert.equal(result.cursor, '300');
 assert.equal(result.reset, false);
 assert.deepEqual(result.messages.map((message) => message.id), ['message-1', 'message-2', 'message-3']);
+
+const missingMessageGmail = {
+  users: {
+    messages: {
+      async get() {
+        throw { response: { status: 404 } };
+      }
+    }
+  }
+} as unknown as GmailClient;
+const account: GmailAccountConfig = {
+  id: 'primary',
+  displayName: 'Primary',
+  refreshToken: 'unused'
+};
+assert.equal(
+  await getMessage(missingMessageGmail, account, 'me@example.com', 'vanished-1'),
+  null
+);
+
+const unavailableGmail = {
+  users: {
+    messages: {
+      async get() {
+        throw { response: { status: 503 } };
+      }
+    }
+  }
+} as unknown as GmailClient;
+await assert.rejects(
+  getMessage(unavailableGmail, account, 'me@example.com', 'message-1'),
+  (error: unknown) => (error as { response?: { status?: number } }).response?.status === 503
+);
 
 console.log('gmail.test.ts: all assertions passed');

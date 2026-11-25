@@ -116,13 +116,24 @@ export async function getMessage(
   account: GmailAccountConfig,
   accountEmail: string,
   id: string
-): Promise<EmailMessage> {
-  const response = await gmail.users.messages.get({
-    userId: 'me',
-    id,
-    format: 'full'
-  });
-  return normalizeMessage(response.data, account, accountEmail);
+): Promise<EmailMessage | null> {
+  try {
+    const response = await gmail.users.messages.get({
+      userId: 'me',
+      id,
+      format: 'full'
+    });
+    return normalizeMessage(response.data, account, accountEmail);
+  } catch (error) {
+    if (isNotFoundError(error)) return null;
+    throw error;
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: unknown; status?: unknown; response?: { status?: unknown } };
+  return candidate.code === 404 || candidate.status === 404 || candidate.response?.status === 404;
 }
 
 function normalizeMessage(
