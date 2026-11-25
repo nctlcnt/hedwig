@@ -157,6 +157,13 @@ systemctl --user status hedwig-digest.service
 journalctl --user -u hedwig-digest.service -f
 ```
 
+Restart the daemon after changing its configuration or re-authorizing a Gmail
+account:
+
+```bash
+systemctl --user restart hedwig-digest.service
+```
+
 ## Repository layout
 
 ```text
